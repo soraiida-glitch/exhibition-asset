@@ -34,5 +34,9 @@ export default defineConfig({
     __MEISHI_WEBHOOK_URL__: JSON.stringify(
       requireEnvValue('N8N_MEISHI_WEBHOOK_URL', env.n8nMeishiWebhookUrl),
     ),
+    __CLOSING_ADVICE_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_CLOSING_ADVICE_WEBHOOK_URL', env.n8nClosingAdviceWebhookUrl),
+    ),
+    __DAILY_ADVICE_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdDailyAdvice'))),
   },
 });

@@ -5,6 +5,7 @@ import { KintoneAdminClient } from '../lib/kintone-client';
 import {
   ACCOUNT_FIELDS,
   CONVERSATION_LOG_FIELDS,
+  DAILY_ADVICE_FIELDS,
   LEAD_FIELDS,
   buildOpportunityFields,
 } from '../apps/schema';
@@ -49,18 +50,35 @@ async function main() {
   }
   console.log('   -> OK: account field is a working LOOKUP into exhibition_取引先.company_name');
 
-  console.log('4/4 Creating exhibition_秘書AI会話ログ ...');
+  console.log('Ensuring exhibition_案件.closing_advice field exists (phase 4) ...');
+  await kintone.ensureFields(opportunityAppId, {
+    closing_advice: {
+      type: 'MULTI_LINE_TEXT',
+      code: 'closing_advice',
+      label: 'クロージングアドバイス(JSON)',
+    },
+  });
+
+  console.log('4/5 Creating exhibition_秘書AI会話ログ ...');
   const conversationLogAppId = await kintone.createAndDeployApp(
     'exhibition_秘書AI会話ログ',
     CONVERSATION_LOG_FIELDS,
   );
   console.log(`   -> live app id ${conversationLogAppId}`);
 
+  console.log('5/5 Creating exhibition_デイリーアドバイス ...');
+  const dailyAdviceAppId = await kintone.createAndDeployApp(
+    'exhibition_デイリーアドバイス',
+    DAILY_ADVICE_FIELDS,
+  );
+  console.log(`   -> live app id ${dailyAdviceAppId}`);
+
   const appIds = {
     account: accountAppId,
     opportunity: opportunityAppId,
     lead: leadAppId,
     conversationLog: conversationLogAppId,
+    dailyAdvice: dailyAdviceAppId,
   };
   fs.writeFileSync(APP_IDS_PATH, JSON.stringify(appIds, null, 2));
   console.log(`Wrote ${APP_IDS_PATH}`);
@@ -70,6 +88,7 @@ async function main() {
     KINTONE_APP_ID_OPPORTUNITY: String(opportunityAppId),
     KINTONE_APP_ID_LEAD: String(leadAppId),
     KINTONE_APP_ID_CONVERSATION_LOG: String(conversationLogAppId),
+    KINTONE_APP_ID_DAILY_ADVICE: String(dailyAdviceAppId),
   });
   console.log('Wrote KINTONE_APP_ID_* into .env');
 
@@ -77,11 +96,12 @@ async function main() {
 ========================================================================
 次の手動ステップ（kintone REST APIでは自動化できません）:
 
-kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の4アプリで実行:
-  - exhibition_取引先        (app id ${accountAppId})
-  - exhibition_案件          (app id ${opportunityAppId})
-  - exhibition_リード        (app id ${leadAppId})
-  - exhibition_秘書AI会話ログ (app id ${conversationLogAppId})
+kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の5アプリで実行:
+  - exhibition_取引先          (app id ${accountAppId})
+  - exhibition_案件            (app id ${opportunityAppId})
+  - exhibition_リード          (app id ${leadAppId})
+  - exhibition_秘書AI会話ログ   (app id ${conversationLogAppId})
+  - exhibition_デイリーアドバイス (app id ${dailyAdviceAppId})
 
 必要な権限: レコードの閲覧 / レコードの追加 / レコードの編集
 
@@ -90,6 +110,7 @@ kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を
   KINTONE_API_TOKEN_OPPORTUNITY=...
   KINTONE_API_TOKEN_LEAD=...
   KINTONE_API_TOKEN_CONVERSATION_LOG=...
+  KINTONE_API_TOKEN_DAILY_ADVICE=...
 ========================================================================
 `);
 }

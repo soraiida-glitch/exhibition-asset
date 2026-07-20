@@ -56,7 +56,24 @@ const CONFIG = {
   opportunityAppId: __OPPORTUNITY_APP_ID__,
   leadAppId: __LEAD_APP_ID__,
   meishiWebhookUrl: __MEISHI_WEBHOOK_URL__,
+  closingAdviceWebhookUrl: __CLOSING_ADVICE_WEBHOOK_URL__,
+  dailyAdviceAppId: __DAILY_ADVICE_APP_ID__,
 };
+
+interface ClosingAdvice {
+  closingProbability?: number;
+  positiveSignals?: string[];
+  riskFactors?: string[];
+  recommendedActions?: string[];
+  summary?: string;
+}
+
+interface DailyAdviceAction {
+  priority?: 'high' | 'medium' | 'low';
+  action?: string;
+  reason?: string;
+  relatedRecord?: string;
+}
 
 const EVENTS = [
   'app.record.index.show',
@@ -141,6 +158,20 @@ function injectStyles(): void {
   padding: 6px; border: 1px solid #ccc; border-radius: 6px; font-size: 12px; margin-top: 2px; }
 .exh-form-submit { margin-top: 8px; width: 100%; background: #2f6fed; color: #fff; border: none;
   border-radius: 6px; padding: 8px; cursor: pointer; }
+.exh-closing-advice-btn { background: #2f6fed; color: #fff; border: none; border-radius: 6px;
+  padding: 6px 12px; font-size: 13px; cursor: pointer; margin-left: 8px; }
+.exh-closing-advice-panel { margin-top: 10px; padding: 12px; border: 1px solid #e0e0e0;
+  border-radius: 8px; background: #fafbff; font-size: 13px; max-width: 480px; }
+.exh-closing-advice-panel.exh-hidden { display: none; }
+.exh-advice-title { font-size: 15px; font-weight: bold; margin-bottom: 6px; color: #2f6fed; }
+.exh-advice-section { margin-top: 8px; }
+.exh-advice-section ul { margin: 4px 0 0; padding-left: 18px; }
+#exh-daily-advice-card { position: fixed; top: 16px; right: 16px; width: 300px; max-height: 60vh;
+  overflow-y: auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.15);
+  padding: 12px; z-index: 9998; font-size: 13px; }
+.exh-daily-advice-title { font-weight: bold; margin-bottom: 8px; color: #2f6fed; }
+.exh-daily-advice-item { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+.exh-daily-advice-related { color: #888; font-size: 11px; }
 `;
   document.head.appendChild(style);
 }
@@ -554,8 +585,125 @@ async function handleSend(text: string): Promise<void> {
   }
 }
 
+function injectClosingAdviceButton(): void {
+  if (document.getElementById('exh-closing-advice-btn')) return;
+
+  const space = kintone.app.record.getHeaderMenuSpaceElement();
+  if (!space) return;
+
+  const btn = document.createElement('button');
+  btn.id = 'exh-closing-advice-btn';
+  btn.className = 'exh-closing-advice-btn';
+  btn.textContent = '🔍 クロージングアドバイスを生成';
+  space.appendChild(btn);
+
+  const panel = document.createElement('div');
+  panel.id = 'exh-closing-advice-panel';
+  panel.className = 'exh-closing-advice-panel exh-hidden';
+  space.appendChild(panel);
+
+  btn.addEventListener('click', () => void generateClosingAdvice(panel));
+}
+
+async function generateClosingAdvice(panel: HTMLElement): Promise<void> {
+  const recordId = String(kintone.app.record.getId() || '');
+  if (!recordId) return;
+
+  panel.classList.remove('exh-hidden');
+  panel.textContent = '分析中...';
+
+  try {
+    const resp = await kintone.proxy(
+      CONFIG.closingAdviceWebhookUrl,
+      'POST',
+      { 'Content-Type': 'application/json', 'x-webhook-secret': CONFIG.webhookSecret },
+      JSON.stringify({ recordId }),
+    );
+    const raw = String(resp[0] ?? '').trim();
+    const advice = JSON.parse(raw) as ClosingAdvice;
+    renderClosingAdvice(panel, advice);
+  } catch (err) {
+    panel.textContent = '生成に失敗しました: ' + formatApiError(err);
+  }
+}
+
+function renderClosingAdvice(panel: HTMLElement, advice: ClosingAdvice): void {
+  const positives = (advice.positiveSignals || []).map((s) => `<li>${escHtml(s)}</li>`).join('');
+  const risks = (advice.riskFactors || []).map((s) => `<li>${escHtml(s)}</li>`).join('');
+  const actions = (advice.recommendedActions || []).map((s) => `<li>${escHtml(s)}</li>`).join('');
+  panel.innerHTML = `
+    <div class="exh-advice-title">受注確度: ${escHtml(advice.closingProbability ?? '?')}%</div>
+    <div>${escHtml(advice.summary ?? '')}</div>
+    ${positives ? `<div class="exh-advice-section">✅ ポジティブ要因<ul>${positives}</ul></div>` : ''}
+    ${risks ? `<div class="exh-advice-section">⚠️ リスク要因<ul>${risks}</ul></div>` : ''}
+    ${actions ? `<div class="exh-advice-section">📌 推奨アクション<ul>${actions}</ul></div>` : ''}
+  `;
+}
+
+function injectDailyAdviceCard(): void {
+  if (document.getElementById('exh-daily-advice-card')) return;
+
+  const card = document.createElement('div');
+  card.id = 'exh-daily-advice-card';
+  card.innerHTML =
+    '<div class="exh-daily-advice-title">📌 本日のアドバイス</div><div id="exh-daily-advice-body">読み込み中...</div>';
+  document.body.appendChild(card);
+
+  void loadDailyAdvice();
+}
+
+async function loadDailyAdvice(): Promise<void> {
+  const bodyEl = document.getElementById('exh-daily-advice-body');
+  if (!bodyEl) return;
+
+  try {
+    const user = kintone.getLoginUser();
+    const today = new Date().toISOString().slice(0, 10);
+    const appId = Number(CONFIG.dailyAdviceAppId);
+    const query = `advice_date = "${today}" and assignee_code = "${user.code.replace(/"/g, '')}" limit 1`;
+    const result = (await kintone.api('/k/v1/records', 'GET', { app: appId, query })) as {
+      records: Array<{ advice_json?: { value: string } }>;
+    };
+
+    const record = result.records[0];
+    if (!record?.advice_json) {
+      bodyEl.textContent = '本日のアドバイスはまだありません。';
+      return;
+    }
+
+    const parsed = JSON.parse(record.advice_json.value) as { actions?: DailyAdviceAction[] };
+    const actions = parsed.actions || [];
+    if (!actions.length) {
+      bodyEl.textContent = '本日のアドバイスはまだありません。';
+      return;
+    }
+
+    const priorityIcon = (priority?: string) =>
+      priority === 'high' ? '🔴' : priority === 'medium' ? '🟡' : '🟢';
+    bodyEl.innerHTML = actions
+      .map((a) => {
+        const related = a.relatedRecord
+          ? ` <span class="exh-daily-advice-related">(${escHtml(a.relatedRecord)})</span>`
+          : '';
+        return `<div class="exh-daily-advice-item">${priorityIcon(a.priority)} ${escHtml(a.action ?? '')}${related}</div>`;
+      })
+      .join('');
+  } catch (err) {
+    bodyEl.textContent = '読み込みに失敗しました: ' + formatApiError(err);
+  }
+}
+
 kintone.events.on(EVENTS, (event) => {
   injectStyles();
   buildUI();
+
+  const appId = String(kintone.app.getId() || '');
+  if (appId === CONFIG.opportunityAppId && event.type === 'app.record.detail.show') {
+    injectClosingAdviceButton();
+  }
+  if (event.type === 'portal.show' || event.type === 'mobile.portal.show') {
+    injectDailyAdviceCard();
+  }
+
   return event;
 });

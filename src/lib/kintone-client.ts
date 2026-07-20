@@ -81,6 +81,23 @@ export class KintoneAdminClient {
     return appId;
   }
 
+  /**
+   * Idempotently adds any of `properties`' fields that don't already exist on a live app
+   * (e.g. adding `closing_advice` to an already-deployed exhibition_案件 in a later phase),
+   * deploying only if something was actually missing.
+   */
+  async ensureFields(appId: number, properties: KintoneFieldProperties): Promise<void> {
+    const existing = await this.getFormFields(appId);
+    const missing = Object.fromEntries(
+      Object.entries(properties).filter(([code]) => !(code in existing)),
+    );
+    if (Object.keys(missing).length === 0) return;
+
+    await this.addFields(appId, missing);
+    await this.deployApp(appId);
+    await this.waitForDeploy(appId);
+  }
+
   async getFormFields(
     appId: number,
     opts: { preview?: boolean } = {},
@@ -105,4 +122,5 @@ export class KintoneAdminClient {
   ): Promise<void> {
     await this.client.app.updateAppCustomize({ app: appId, ...customize });
   }
+
 }

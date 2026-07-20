@@ -19,6 +19,8 @@ export interface AgentWorkflowConfig {
   leadApiToken: string;
   conversationLogAppId: number;
   conversationLogApiToken: string;
+  dailyAdviceAppId: number;
+  dailyAdviceApiToken: string;
 }
 
 const PLANNER_SYSTEM_PROMPT = `あなたはCRMチャットの検索プランナーです。ユーザーの発言と直近の会話履歴から、
@@ -32,8 +34,10 @@ kintoneのレコード検索に使うキーワードを1つ抽出してくださ
   それ以外の一般的な会話なら "chat"`;
 
 const MAIN_SYSTEM_PROMPT = `あなたはkintone上のCRM「exhibition-asset」の営業秘書AIです。
-以下のkintone検索結果(exhibition_取引先/exhibition_案件/exhibition_リードの一部レコード)と
-会話履歴を参考に、ユーザーの質問に日本語で簡潔に答えてください。
+以下のkintone検索結果(exhibition_取引先/exhibition_案件/exhibition_リードの一部レコード、
+および本日分のexhibition_デイリーアドバイス——n8nのCronが日次生成済み)と会話履歴を参考に、
+ユーザーの質問に日本語で簡潔に答えてください。「今日やることを教えて」のような質問には
+デイリーアドバイスのadvice_json(actions配列)を優先度順に整理して答えてください。
 
 回答は必ず次のJSON形式のみで返してください(説明文やコードブロックは不要):
 {
@@ -69,7 +73,7 @@ function offsetPositions(startX: number, y: number, count: number, gap = 220): [
 }
 
 export function buildAgentWorkflow(config: AgentWorkflowConfig) {
-  const positions = offsetPositions(0, 300, 13);
+  const positions = offsetPositions(0, 300, 15);
   let p = 0;
   const nextPos = () => positions[p++];
 
@@ -243,6 +247,31 @@ return [{ json: { ...original, plan } }];
       },
     },
     {
+      id: 'search_daily_advice',
+      name: 'Search Daily Advice',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextPos(),
+      parameters: {
+        method: 'GET',
+        url: `${config.kintoneBaseUrl}/k/v1/records.json`,
+        sendHeaders: true,
+        headerParameters: { parameters: kintoneHeader(config.dailyAdviceApiToken) },
+        sendQuery: true,
+        queryParameters: {
+          parameters: [
+            { name: 'app', value: String(config.dailyAdviceAppId) },
+            {
+              name: 'query',
+              value:
+                '={{ "advice_date = \\"" + new Date().toISOString().slice(0, 10) + "\\" and assignee_code = \\"" + ($node["Parse Query Plan"].json.userCode || "").replace(/"/g, "") + "\\" limit 1" }}',
+            },
+          ],
+        },
+        options: {},
+      },
+    },
+    {
       id: 'merge_search_results',
       name: 'Merge Search Results',
       type: 'n8n-nodes-base.code',
@@ -257,6 +286,7 @@ return [{ json: {
     accountRecords: ($node["Search Account"].json.records || []),
     opportunityRecords: ($node["Search Opportunity"].json.records || []),
     leadRecords: ($node["Search Lead"].json.records || []),
+    dailyAdviceRecords: ($node["Search Daily Advice"].json.records || []),
   },
 } }];
 `.trim(),
@@ -358,7 +388,8 @@ return [{ json: {
     'Parse Query Plan': { main: [[{ node: 'Search Account', type: 'main', index: 0 }]] },
     'Search Account': { main: [[{ node: 'Search Opportunity', type: 'main', index: 0 }]] },
     'Search Opportunity': { main: [[{ node: 'Search Lead', type: 'main', index: 0 }]] },
-    'Search Lead': { main: [[{ node: 'Merge Search Results', type: 'main', index: 0 }]] },
+    'Search Lead': { main: [[{ node: 'Search Daily Advice', type: 'main', index: 0 }]] },
+    'Search Daily Advice': { main: [[{ node: 'Merge Search Results', type: 'main', index: 0 }]] },
     'Merge Search Results': { main: [[{ node: 'Main AI', type: 'main', index: 0 }]] },
     'Main AI': { main: [[{ node: 'Format Response', type: 'main', index: 0 }]] },
     'Format Response': { main: [[{ node: 'Log Conversation', type: 'main', index: 0 }]] },

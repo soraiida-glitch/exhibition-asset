@@ -202,5 +202,53 @@ export function buildOpportunityFields(accountAppId: number): KintoneFieldProper
       code: 'description',
       label: '概要',
     },
+    closing_advice: {
+      type: 'MULTI_LINE_TEXT',
+      code: 'closing_advice',
+      label: 'クロージングアドバイス(JSON)',
+    },
   };
 }
+
+export const DAILY_ADVICE_STATUS_OPTIONS = ['完了', 'エラー'];
+
+/**
+ * exhibition_デイリーアドバイス — one record per (advice_date, assignee_code), written by the
+ * daily cron workflow. Every field here is actually written by that workflow — Relava's
+ * equivalent app had a `status`/`completion_rate` pair defined but never populated; we don't
+ * define fields we don't intend to write.
+ */
+export const DAILY_ADVICE_FIELDS: KintoneFieldProperties = {
+  advice_date: {
+    type: 'DATE',
+    code: 'advice_date',
+    label: '対象日',
+  },
+  assignee_code: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'assignee_code',
+    label: '担当者コード',
+  },
+  assignee_name: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'assignee_name',
+    label: '担当者名',
+  },
+  context_summary: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'context_summary',
+    label: 'コンテキストサマリー',
+  },
+  advice_json: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'advice_json',
+    label: 'AIアドバイス(JSON)',
+  },
+  status: {
+    type: 'DROP_DOWN',
+    code: 'status',
+    label: 'ステータス',
+    options: dropdownOptions(DAILY_ADVICE_STATUS_OPTIONS),
+    defaultValue: '完了',
+  },
+};

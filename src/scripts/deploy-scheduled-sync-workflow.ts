@@ -1,7 +1,6 @@
-import crypto from 'node:crypto';
-import { loadEnv, patchEnvFile, requireAppId } from '../config/env';
+import { loadEnv, requireAppId } from '../config/env';
 import { N8nClient } from '../lib/n8n-client';
-import { AGENT_WEBHOOK_PATH, buildAgentWorkflow } from '../workflows/agent-workflow';
+import { buildScheduledSyncWorkflow } from '../workflows/scheduled-sync-workflow';
 
 function requireEnvValue(name: string, value: string | undefined): string {
   if (!value) {
@@ -13,15 +12,11 @@ function requireEnvValue(name: string, value: string | undefined): string {
 async function main() {
   const env = loadEnv();
 
-  const webhookSecret = env.n8nWebhookSecret || crypto.randomBytes(24).toString('hex');
-  if (!env.n8nWebhookSecret) {
-    patchEnvFile({ N8N_WEBHOOK_SECRET: webhookSecret });
-    console.log('Generated a new N8N_WEBHOOK_SECRET and wrote it to .env');
-  }
-
-  const workflow = buildAgentWorkflow({
-    webhookSecret,
+  const workflow = buildScheduledSyncWorkflow({
     openaiApiKey: requireEnvValue('OPENAI_API_KEY', env.openaiApiKey),
+    pineconeApiKey: requireEnvValue('PINECONE_API_KEY', env.pineconeApiKey),
+    pineconeHost: requireEnvValue('PINECONE_HOST', env.pineconeHost),
+    pineconeNamespace: env.pineconeNamespace || 'exhibition-kintone',
     kintoneBaseUrl: `https://${env.kintoneSubdomain}.cybozu.com`,
     accountAppId: requireAppId(env, 'kintoneAppIdAccount'),
     accountApiToken: requireEnvValue('KINTONE_API_TOKEN_ACCOUNT', env.kintoneApiTokenAccount),
@@ -32,16 +27,6 @@ async function main() {
     ),
     leadAppId: requireAppId(env, 'kintoneAppIdLead'),
     leadApiToken: requireEnvValue('KINTONE_API_TOKEN_LEAD', env.kintoneApiTokenLead),
-    conversationLogAppId: requireAppId(env, 'kintoneAppIdConversationLog'),
-    conversationLogApiToken: requireEnvValue(
-      'KINTONE_API_TOKEN_CONVERSATION_LOG',
-      env.kintoneApiTokenConversationLog,
-    ),
-    dailyAdviceAppId: requireAppId(env, 'kintoneAppIdDailyAdvice'),
-    dailyAdviceApiToken: requireEnvValue(
-      'KINTONE_API_TOKEN_DAILY_ADVICE',
-      env.kintoneApiTokenDailyAdvice,
-    ),
   });
 
   const n8n = new N8nClient({ instanceUrl: env.n8nInstanceUrl, apiKey: env.n8nApiKey });
@@ -52,10 +37,6 @@ async function main() {
 
   console.log('Activating workflow ...');
   await n8n.activateWorkflow(workflowId);
-
-  const webhookUrl = n8n.buildWebhookUrl(AGENT_WEBHOOK_PATH);
-  patchEnvFile({ N8N_KINTONE_AGENT_WEBHOOK_URL: webhookUrl });
-  console.log(`Wrote N8N_KINTONE_AGENT_WEBHOOK_URL=${webhookUrl} into .env`);
   console.log('Done.');
 }
 

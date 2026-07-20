@@ -16,21 +16,31 @@ export interface AppEnv {
   n8nMeishiWebhookUrl?: string;
   n8nContactFormSecret?: string;
   n8nContactFormWebhookUrl?: string;
+  n8nSyncWebhookUrl?: string;
+  n8nClosingAdviceWebhookUrl?: string;
+  pineconeApiKey?: string;
+  pineconeIndexName?: string;
+  pineconeHost?: string;
+  pineconeNamespace?: string;
+  kintoneWebhookToken?: string;
   kintoneAppIdAccount?: number;
   kintoneAppIdOpportunity?: number;
   kintoneAppIdLead?: number;
   kintoneAppIdConversationLog?: number;
+  kintoneAppIdDailyAdvice?: number;
   kintoneApiTokenAccount?: string;
   kintoneApiTokenOpportunity?: string;
   kintoneApiTokenLead?: string;
   kintoneApiTokenConversationLog?: string;
+  kintoneApiTokenDailyAdvice?: string;
 }
 
 type AppIdKey =
   | 'kintoneAppIdAccount'
   | 'kintoneAppIdOpportunity'
   | 'kintoneAppIdLead'
-  | 'kintoneAppIdConversationLog';
+  | 'kintoneAppIdConversationLog'
+  | 'kintoneAppIdDailyAdvice';
 
 const REQUIRED_KEYS = [
   'KINTONE_SUBDOMAIN',
@@ -67,14 +77,23 @@ export function loadEnv(): AppEnv {
     n8nMeishiWebhookUrl: process.env.N8N_MEISHI_WEBHOOK_URL || undefined,
     n8nContactFormSecret: process.env.N8N_CONTACT_FORM_SECRET || undefined,
     n8nContactFormWebhookUrl: process.env.N8N_CONTACT_FORM_WEBHOOK_URL || undefined,
+    n8nSyncWebhookUrl: process.env.N8N_SYNC_WEBHOOK_URL || undefined,
+    n8nClosingAdviceWebhookUrl: process.env.N8N_CLOSING_ADVICE_WEBHOOK_URL || undefined,
+    pineconeApiKey: process.env.PINECONE_API_KEY || undefined,
+    pineconeIndexName: process.env.PINECONE_INDEX_NAME || undefined,
+    pineconeHost: process.env.PINECONE_HOST || undefined,
+    pineconeNamespace: process.env.PINECONE_NAMESPACE || undefined,
+    kintoneWebhookToken: process.env.KINTONE_WEBHOOK_TOKEN || undefined,
     kintoneAppIdAccount: parseOptionalAppId('KINTONE_APP_ID_ACCOUNT'),
     kintoneAppIdOpportunity: parseOptionalAppId('KINTONE_APP_ID_OPPORTUNITY'),
     kintoneAppIdLead: parseOptionalAppId('KINTONE_APP_ID_LEAD'),
     kintoneAppIdConversationLog: parseOptionalAppId('KINTONE_APP_ID_CONVERSATION_LOG'),
+    kintoneAppIdDailyAdvice: parseOptionalAppId('KINTONE_APP_ID_DAILY_ADVICE'),
     kintoneApiTokenAccount: process.env.KINTONE_API_TOKEN_ACCOUNT || undefined,
     kintoneApiTokenOpportunity: process.env.KINTONE_API_TOKEN_OPPORTUNITY || undefined,
     kintoneApiTokenLead: process.env.KINTONE_API_TOKEN_LEAD || undefined,
     kintoneApiTokenConversationLog: process.env.KINTONE_API_TOKEN_CONVERSATION_LOG || undefined,
+    kintoneApiTokenDailyAdvice: process.env.KINTONE_API_TOKEN_DAILY_ADVICE || undefined,
   };
 }
 
