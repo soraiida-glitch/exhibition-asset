@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACCOUNT_FIELDS, buildOpportunityFields } from '../../apps/schema';
+import { ACCOUNT_FIELDS, CONVERSATION_LOG_FIELDS, buildOpportunityFields } from '../../apps/schema';
 
 describe('ACCOUNT_FIELDS', () => {
   it('marks company_name as required and unique', () => {
@@ -8,6 +8,17 @@ describe('ACCOUNT_FIELDS', () => {
       required: true,
       unique: true,
     });
+  });
+});
+
+describe('CONVERSATION_LOG_FIELDS', () => {
+  it('defaults status to 完了 with only 完了/エラー as options', () => {
+    const status = CONVERSATION_LOG_FIELDS.status as unknown as {
+      defaultValue: string;
+      options: Record<string, unknown>;
+    };
+    expect(status.defaultValue).toBe('完了');
+    expect(Object.keys(status.options)).toEqual(['完了', 'エラー']);
   });
 });
 

@@ -4,6 +4,30 @@ function dropdownOptions(labels: string[]): Record<string, { label: string; inde
   return Object.fromEntries(labels.map((label, index) => [label, { label, index: String(index) }]));
 }
 
+// Exported so the AI agent's prompt (src/workflows/agent-workflow.ts) can enumerate the exact
+// valid values instead of drifting out of sync with a second hardcoded copy — kintone rejects
+// any DROP_DOWN value that isn't byte-for-byte one of these (CB_VA01 "not in options").
+export const ACCOUNT_INDUSTRY_OPTIONS = [
+  'IT・ソフトウェア',
+  '製造',
+  '小売・流通',
+  '金融・保険',
+  '医療・ヘルスケア',
+  '建設・不動産',
+  'サービス',
+  'その他',
+];
+export const ACCOUNT_STATUS_OPTIONS = ['見込み', '取引中', '休眠'];
+export const OPPORTUNITY_STAGE_OPTIONS = [
+  '初期接触',
+  'ヒアリング',
+  '提案中',
+  '見積提出',
+  '交渉中',
+  '成約',
+  '失注',
+];
+
 /** exhibition_取引先 (Account) — minimal first-pass schema; detailed field design deferred per requirements doc. */
 export const ACCOUNT_FIELDS: KintoneFieldProperties = {
   company_name: {
@@ -17,16 +41,7 @@ export const ACCOUNT_FIELDS: KintoneFieldProperties = {
     type: 'DROP_DOWN',
     code: 'industry',
     label: '業種',
-    options: dropdownOptions([
-      'IT・ソフトウェア',
-      '製造',
-      '小売・流通',
-      '金融・保険',
-      '医療・ヘルスケア',
-      '建設・不動産',
-      'サービス',
-      'その他',
-    ]),
+    options: dropdownOptions(ACCOUNT_INDUSTRY_OPTIONS),
   },
   contact_name: {
     type: 'SINGLE_LINE_TEXT',
@@ -47,7 +62,7 @@ export const ACCOUNT_FIELDS: KintoneFieldProperties = {
     type: 'DROP_DOWN',
     code: 'status',
     label: 'ステータス',
-    options: dropdownOptions(['見込み', '取引中', '休眠']),
+    options: dropdownOptions(ACCOUNT_STATUS_OPTIONS),
     defaultValue: '見込み',
   },
   memo: {
@@ -100,6 +115,42 @@ export const LEAD_FIELDS: KintoneFieldProperties = {
   },
 };
 
+/** exhibition_秘書AI会話ログ — audit/history log for the AI agent; the chat UI responds synchronously and does not poll this app. */
+export const CONVERSATION_LOG_FIELDS: KintoneFieldProperties = {
+  session_id: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'session_id',
+    label: 'セッションID',
+  },
+  user_name: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'user_name',
+    label: 'ユーザー名',
+  },
+  message: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'message',
+    label: 'メッセージ',
+  },
+  ai_answer: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'ai_answer',
+    label: 'AI応答',
+  },
+  status: {
+    type: 'DROP_DOWN',
+    code: 'status',
+    label: 'ステータス',
+    options: dropdownOptions(['完了', 'エラー']),
+    defaultValue: '完了',
+  },
+  error_message: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'error_message',
+    label: 'エラーメッセージ',
+  },
+};
+
 /**
  * exhibition_案件 (Opportunity). Needs the already-*deployed* (live) 取引先 app id,
  * since the LOOKUP field references it — must be built after exhibition_取引先 is live.
@@ -131,15 +182,7 @@ export function buildOpportunityFields(accountAppId: number): KintoneFieldProper
       type: 'DROP_DOWN',
       code: 'stage',
       label: 'フェーズ',
-      options: dropdownOptions([
-        '初期接触',
-        'ヒアリング',
-        '提案中',
-        '見積提出',
-        '交渉中',
-        '成約',
-        '失注',
-      ]),
+      options: dropdownOptions(OPPORTUNITY_STAGE_OPTIONS),
       defaultValue: '初期接触',
     },
     close_date: {

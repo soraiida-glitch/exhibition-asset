@@ -3,8 +3,11 @@
 AI活用型顧客管理システム(kintone版)。既存のSalesforce版アセットをkintone上で
 再構築するプロジェクトです。詳細は `kintone_crm_requirements.md` を参照してください。
 
-現在の実装範囲: **Phase 1 — 基盤**(exhibition_取引先 / exhibition_案件 / exhibition_リード
-の3アプリ作成と、n8n連携の疎通確認)。
+現在の実装範囲:
+- **Phase 1 — 基盤**: exhibition_取引先 / exhibition_案件 / exhibition_リードの3アプリ作成と、
+  n8n連携の疎通確認
+- **Phase 2 — 秘書AIエージェント(MVP)**: exhibition_秘書AI会話ログアプリ、n8n上のAIエージェント
+  ワークフロー、kintoneチャットUI(取引先・案件の検索/登録/編集フォーム)
 
 ## セットアップ手順
 
@@ -18,6 +21,7 @@ cp .env.example .env
 
 - `KINTONE_SUBDOMAIN` / `KINTONE_ADMIN_USER` / `KINTONE_ADMIN_PASSWORD`
 - `N8N_INSTANCE_URL` / `N8N_API_KEY`
+- `OPENAI_API_KEY`(Phase 2の秘書AIエージェントで使用)
 
 ### 2. 依存関係をインストール
 
@@ -31,7 +35,7 @@ npm install
 npm run setup:apps
 ```
 
-以下の3アプリが作成されます(この順序で作成する必要があります。
+以下の4アプリが作成されます(この順序で作成する必要があります。
 `exhibition_案件` の `account` フィールドは `exhibition_取引先` の
 `company_name`(一意設定済み)を参照するLOOKUPフィールドのため、
 `exhibition_取引先` が先にデプロイ済みである必要があります):
@@ -41,8 +45,9 @@ npm run setup:apps
 | exhibition_取引先 | 会社情報マスタ |
 | exhibition_リード | 名刺・問い合わせ由来の見込み客 |
 | exhibition_案件 | 商談・案件管理(取引先へのLOOKUP付き) |
+| exhibition_秘書AI会話ログ | 秘書AIエージェントの対話履歴(監査・履歴用、UIはポーリングしない) |
 
-実行後、3アプリのApp IDが `app-ids.json` と `.env` の `KINTONE_APP_ID_*` に
+実行後、4アプリのApp IDが `app-ids.json` と `.env` の `KINTONE_APP_ID_*` に
 自動で書き込まれます。
 
 ### 4. 各アプリのAPIトークンを発行(手動)
@@ -50,12 +55,11 @@ npm run setup:apps
 kintone REST APIにはAPIトークンを発行するエンドポイントがないため、
 この手順は手動で行う必要があります。
 
-kintone管理画面 → 各アプリの設定 → APIトークン → 追加
+kintone管理画面 → 各アプリの設定 → APIトークン → 追加(4アプリすべてで実行)
 
 必要な権限: `レコードの閲覧` `レコードの追加` `レコードの編集`
 
-発行したトークンを `.env` の `KINTONE_API_TOKEN_*` に設定してください
-(Phase 2以降のレコードCRUD実装で使用します)。
+発行したトークンを `.env` の `KINTONE_API_TOKEN_*` に設定してください。
 
 ### 5. n8n連携の疎通確認
 
@@ -73,8 +77,43 @@ npm run check:n8n
 npm run gen:types
 ```
 
-`types/generated/{account,opportunity,lead}.d.ts` に各アプリのフィールド型が
-生成されます(フィールドスキーマを変更したら再実行してください)。
+`types/generated/{account,opportunity,lead,conversation-log}.d.ts` に各アプリの
+フィールド型が生成されます(フィールドスキーマを変更したら再実行してください)。
+
+### 7. 秘書AIエージェントのn8nワークフローをデプロイ
+
+```bash
+npm run setup:agent
+```
+
+`[kintone] 秘書AIエージェント` ワークフローを作成・有効化します。`N8N_WEBHOOK_SECRET`
+(未設定なら自動生成)と `N8N_KINTONE_AGENT_WEBHOOK_URL` が `.env` に書き込まれます。
+
+n8n側の処理: Webhookシークレット検証 → GPT-4o-miniで検索キーワード抽出 →
+取引先/案件/リードの3アプリをkintone REST APIで検索 → GPT-4oで回答生成(検索/新規登録/
+既存編集フォームの判定を含む)→ exhibition_秘書AI会話ログに記録 → 応答。
+
+### 8. チャットUIをビルド・デプロイ
+
+```bash
+npm run deploy:customize
+```
+
+`src/customize/chat.ts` をViteでビルドし、取引先・案件・リードの3アプリの
+JavaScriptカスタマイズとして自動デプロイします(`npm run build:customize` だけを
+単独実行してビルドのみ行うことも可能)。
+
+### 9. 動作確認
+
+kintoneの取引先・案件・リードいずれかの画面を開くと右下に💬ボタンが表示されます。
+
+- 「テック商事の案件を教えて」のように質問 → kintoneを検索して回答
+- 「📋 取引先登録」「💼 案件登録」チップをクリック → 直接登録フォームが開く
+  (業種・ステータス・フェーズはプルダウン選択)
+- チャットで「新しい取引先を登録したい。会社名は...」のように依頼 → AIが内容を聞き取って
+  同じフォームを表示
+- 既存レコードを検索してヒットした後に「〜を編集して」と依頼 → 既存値がプリフィルされた
+  編集フォームが表示
 
 ## その他のコマンド
 
@@ -89,15 +128,21 @@ npm run lint        # eslint
 ```
 exhibition-asset/
 ├── src/
-│   ├── config/env.ts          # .env読み込み・検証
+│   ├── config/env.ts           # .env読み込み・検証
 │   ├── lib/
-│   │   ├── kintone-client.ts  # kintone REST APIラッパー(@kintone/rest-api-client)
-│   │   └── n8n-client.ts      # n8n REST APIクライアント
-│   ├── apps/schema.ts         # 3アプリのフィールド定義
+│   │   ├── kintone-client.ts   # kintone REST APIラッパー(@kintone/rest-api-client)
+│   │   └── n8n-client.ts       # n8n REST APIクライアント
+│   ├── apps/schema.ts          # 4アプリのフィールド定義(ドロップダウン選択肢もここが正)
+│   ├── workflows/agent-workflow.ts  # 秘書AIエージェントのn8nノード/コネクション定義
+│   ├── customize/chat.ts       # kintoneチャットUI(ブラウザ側、Viteでビルド)
 │   └── scripts/
 │       ├── setup-kintone-apps.ts
 │       ├── check-n8n-connectivity.ts
-│       └── generate-types.ts
+│       ├── generate-types.ts
+│       ├── deploy-agent-workflow.ts
+│       └── deploy-customize.ts
+├── vite.config.ts               # chat.tsのビルド設定(webhook URL等をビルド時に注入)
 ├── app-ids.json                 # 生成物(gitignore対象)
-└── types/generated/             # 生成物(gitignore対象)
+├── dist/customize/               # 生成物(gitignore対象)
+└── types/generated/              # 生成物(gitignore対象)
 ```

@@ -10,12 +10,24 @@ export interface AppEnv {
   kintoneAdminPassword: string;
   n8nInstanceUrl: string;
   n8nApiKey: string;
+  openaiApiKey?: string;
+  n8nWebhookSecret?: string;
+  n8nAgentWebhookUrl?: string;
   kintoneAppIdAccount?: number;
   kintoneAppIdOpportunity?: number;
   kintoneAppIdLead?: number;
+  kintoneAppIdConversationLog?: number;
+  kintoneApiTokenAccount?: string;
+  kintoneApiTokenOpportunity?: string;
+  kintoneApiTokenLead?: string;
+  kintoneApiTokenConversationLog?: string;
 }
 
-type AppIdKey = 'kintoneAppIdAccount' | 'kintoneAppIdOpportunity' | 'kintoneAppIdLead';
+type AppIdKey =
+  | 'kintoneAppIdAccount'
+  | 'kintoneAppIdOpportunity'
+  | 'kintoneAppIdLead'
+  | 'kintoneAppIdConversationLog';
 
 const REQUIRED_KEYS = [
   'KINTONE_SUBDOMAIN',
@@ -46,9 +58,17 @@ export function loadEnv(): AppEnv {
     kintoneAdminPassword: process.env.KINTONE_ADMIN_PASSWORD!,
     n8nInstanceUrl: process.env.N8N_INSTANCE_URL!,
     n8nApiKey: process.env.N8N_API_KEY!,
+    openaiApiKey: process.env.OPENAI_API_KEY || undefined,
+    n8nWebhookSecret: process.env.N8N_WEBHOOK_SECRET || undefined,
+    n8nAgentWebhookUrl: process.env.N8N_KINTONE_AGENT_WEBHOOK_URL || undefined,
     kintoneAppIdAccount: parseOptionalAppId('KINTONE_APP_ID_ACCOUNT'),
     kintoneAppIdOpportunity: parseOptionalAppId('KINTONE_APP_ID_OPPORTUNITY'),
     kintoneAppIdLead: parseOptionalAppId('KINTONE_APP_ID_LEAD'),
+    kintoneAppIdConversationLog: parseOptionalAppId('KINTONE_APP_ID_CONVERSATION_LOG'),
+    kintoneApiTokenAccount: process.env.KINTONE_API_TOKEN_ACCOUNT || undefined,
+    kintoneApiTokenOpportunity: process.env.KINTONE_API_TOKEN_OPPORTUNITY || undefined,
+    kintoneApiTokenLead: process.env.KINTONE_API_TOKEN_LEAD || undefined,
+    kintoneApiTokenConversationLog: process.env.KINTONE_API_TOKEN_CONVERSATION_LOG || undefined,
   };
 }
 

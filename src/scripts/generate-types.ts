@@ -15,6 +15,7 @@ interface AppIds {
   account: number;
   opportunity: number;
   lead: number;
+  conversationLog: number;
 }
 
 const TARGETS: Array<{ key: keyof AppIds; typeName: string; namespace: string; file: string }> = [
@@ -26,6 +27,12 @@ const TARGETS: Array<{ key: keyof AppIds; typeName: string; namespace: string; f
     file: 'opportunity.d.ts',
   },
   { key: 'lead', typeName: 'ExhibitionLeadFields', namespace: 'exhibition.lead', file: 'lead.d.ts' },
+  {
+    key: 'conversationLog',
+    typeName: 'ExhibitionConversationLogFields',
+    namespace: 'exhibition.conversationLog',
+    file: 'conversation-log.d.ts',
+  },
 ];
 
 function main() {

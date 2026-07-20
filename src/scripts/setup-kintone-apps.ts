@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadEnv, patchEnvFile } from '../config/env';
 import { KintoneAdminClient } from '../lib/kintone-client';
-import { ACCOUNT_FIELDS, LEAD_FIELDS, buildOpportunityFields } from '../apps/schema';
+import {
+  ACCOUNT_FIELDS,
+  CONVERSATION_LOG_FIELDS,
+  LEAD_FIELDS,
+  buildOpportunityFields,
+} from '../apps/schema';
 
 const APP_IDS_PATH = path.resolve(process.cwd(), 'app-ids.json');
 
@@ -44,7 +49,19 @@ async function main() {
   }
   console.log('   -> OK: account field is a working LOOKUP into exhibition_取引先.company_name');
 
-  const appIds = { account: accountAppId, opportunity: opportunityAppId, lead: leadAppId };
+  console.log('4/4 Creating exhibition_秘書AI会話ログ ...');
+  const conversationLogAppId = await kintone.createAndDeployApp(
+    'exhibition_秘書AI会話ログ',
+    CONVERSATION_LOG_FIELDS,
+  );
+  console.log(`   -> live app id ${conversationLogAppId}`);
+
+  const appIds = {
+    account: accountAppId,
+    opportunity: opportunityAppId,
+    lead: leadAppId,
+    conversationLog: conversationLogAppId,
+  };
   fs.writeFileSync(APP_IDS_PATH, JSON.stringify(appIds, null, 2));
   console.log(`Wrote ${APP_IDS_PATH}`);
 
@@ -52,6 +69,7 @@ async function main() {
     KINTONE_APP_ID_ACCOUNT: String(accountAppId),
     KINTONE_APP_ID_OPPORTUNITY: String(opportunityAppId),
     KINTONE_APP_ID_LEAD: String(leadAppId),
+    KINTONE_APP_ID_CONVERSATION_LOG: String(conversationLogAppId),
   });
   console.log('Wrote KINTONE_APP_ID_* into .env');
 
@@ -59,10 +77,11 @@ async function main() {
 ========================================================================
 次の手動ステップ（kintone REST APIでは自動化できません）:
 
-kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の3アプリで実行:
-  - exhibition_取引先  (app id ${accountAppId})
-  - exhibition_案件    (app id ${opportunityAppId})
-  - exhibition_リード  (app id ${leadAppId})
+kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の4アプリで実行:
+  - exhibition_取引先        (app id ${accountAppId})
+  - exhibition_案件          (app id ${opportunityAppId})
+  - exhibition_リード        (app id ${leadAppId})
+  - exhibition_秘書AI会話ログ (app id ${conversationLogAppId})
 
 必要な権限: レコードの閲覧 / レコードの追加 / レコードの編集
 
@@ -70,6 +89,7 @@ kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を
   KINTONE_API_TOKEN_ACCOUNT=...
   KINTONE_API_TOKEN_OPPORTUNITY=...
   KINTONE_API_TOKEN_LEAD=...
+  KINTONE_API_TOKEN_CONVERSATION_LOG=...
 ========================================================================
 `);
 }
