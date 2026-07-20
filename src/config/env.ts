@@ -13,6 +13,9 @@ export interface AppEnv {
   openaiApiKey?: string;
   n8nWebhookSecret?: string;
   n8nAgentWebhookUrl?: string;
+  n8nMeishiWebhookUrl?: string;
+  n8nContactFormSecret?: string;
+  n8nContactFormWebhookUrl?: string;
   kintoneAppIdAccount?: number;
   kintoneAppIdOpportunity?: number;
   kintoneAppIdLead?: number;
@@ -61,6 +64,9 @@ export function loadEnv(): AppEnv {
     openaiApiKey: process.env.OPENAI_API_KEY || undefined,
     n8nWebhookSecret: process.env.N8N_WEBHOOK_SECRET || undefined,
     n8nAgentWebhookUrl: process.env.N8N_KINTONE_AGENT_WEBHOOK_URL || undefined,
+    n8nMeishiWebhookUrl: process.env.N8N_MEISHI_WEBHOOK_URL || undefined,
+    n8nContactFormSecret: process.env.N8N_CONTACT_FORM_SECRET || undefined,
+    n8nContactFormWebhookUrl: process.env.N8N_CONTACT_FORM_WEBHOOK_URL || undefined,
     kintoneAppIdAccount: parseOptionalAppId('KINTONE_APP_ID_ACCOUNT'),
     kintoneAppIdOpportunity: parseOptionalAppId('KINTONE_APP_ID_OPPORTUNITY'),
     kintoneAppIdLead: parseOptionalAppId('KINTONE_APP_ID_LEAD'),

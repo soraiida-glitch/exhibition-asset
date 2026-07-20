@@ -1,8 +1,11 @@
 import {
   ACCOUNT_INDUSTRY_OPTIONS,
   ACCOUNT_STATUS_OPTIONS,
+  LEAD_SOURCE_OPTIONS,
+  LEAD_STATUS_OPTIONS,
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
+import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -34,12 +37,25 @@ interface AgentResponse {
   prefill?: Record<string, unknown>;
 }
 
+interface MeishiResult {
+  data: {
+    lead_name?: string;
+    company_name?: string;
+    phone?: string;
+    email?: string;
+    memo?: string;
+  };
+  isDuplicate: boolean;
+  duplicateRecordId: string | null;
+}
+
 const CONFIG = {
   webhookUrl: __WEBHOOK_URL__,
   webhookSecret: __WEBHOOK_SECRET__,
   accountAppId: __ACCOUNT_APP_ID__,
   opportunityAppId: __OPPORTUNITY_APP_ID__,
   leadAppId: __LEAD_APP_ID__,
+  meishiWebhookUrl: __MEISHI_WEBHOOK_URL__,
 };
 
 const EVENTS = [
@@ -112,7 +128,8 @@ function injectStyles(): void {
 .exh-bubble.exh-ai { background: #fff; color: #222; border: 1px solid #e0e0e0; }
 .exh-pill { display: inline-block; margin: 4px 4px 0 0; padding: 2px 8px; border-radius: 999px;
   background: #eef2ff; color: #2f6fed; font-size: 11px; text-decoration: none; }
-#exh-footer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #e0e0e0; }
+#exh-footer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #e0e0e0; align-items: flex-end; }
+#exh-image-btn { background: none; border: none; font-size: 20px; cursor: pointer; padding: 0 2px; }
 #exh-input { flex: 1; resize: none; border: 1px solid #ccc; border-radius: 8px; padding: 8px;
   font-size: 13px; max-height: 80px; }
 #exh-send { background: #2f6fed; color: #fff; border: none; border-radius: 8px; padding: 0 14px;
@@ -148,8 +165,11 @@ function buildUI(): void {
     <div id="exh-chips">
       <button class="exh-chip" data-chip="account">📋 取引先登録</button>
       <button class="exh-chip" data-chip="opportunity">💼 案件登録</button>
+      <button class="exh-chip" data-chip="lead">🧑 リード登録</button>
     </div>
     <div id="exh-footer">
+      <button id="exh-image-btn" type="button" title="名刺画像をアップロード">📷</button>
+      <input id="exh-image-input" type="file" accept="image/*" style="display:none">
       <textarea id="exh-input" rows="1" placeholder="質問や依頼を入力..."></textarea>
       <button id="exh-send">送信</button>
     </div>
@@ -163,6 +183,16 @@ function buildUI(): void {
   panel
     .querySelector('[data-chip="opportunity"]')!
     .addEventListener('click', () => pushOpportunityForm({}));
+  panel.querySelector('[data-chip="lead"]')!.addEventListener('click', () => pushLeadForm({}));
+
+  const imageBtn = panel.querySelector<HTMLButtonElement>('#exh-image-btn')!;
+  const imageInput = panel.querySelector<HTMLInputElement>('#exh-image-input')!;
+  imageBtn.addEventListener('click', () => imageInput.click());
+  imageInput.addEventListener('change', () => {
+    const file = imageInput.files?.[0];
+    imageInput.value = '';
+    if (file) void handleMeishiUpload(file);
+  });
 
   const input = panel.querySelector<HTMLTextAreaElement>('#exh-input')!;
   const sendBtn = panel.querySelector<HTMLButtonElement>('#exh-send')!;
@@ -198,6 +228,15 @@ function pushUser(text: string): void {
 function scrollToBottom(): void {
   const msgs = getMsgsEl();
   msgs.scrollTop = msgs.scrollHeight;
+}
+
+function pushLoadingBubble(text: string): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'exh-bubble exh-ai';
+  el.textContent = text;
+  getMsgsEl().appendChild(el);
+  scrollToBottom();
+  return el;
 }
 
 function pushAI(text: string, data?: AgentResponse): void {
@@ -322,6 +361,28 @@ function pushOpportunityForm(prefill: Record<string, unknown>): void {
   scrollToBottom();
 }
 
+function pushLeadForm(prefill: Record<string, unknown>): void {
+  const isEdit = !!prefill._recordId;
+  const wrap = document.createElement('div');
+  wrap.className = 'exh-form';
+  wrap.innerHTML = `
+    <div>${isEdit ? '✏️ リード情報を編集' : '📋 新規リード登録'}</div>
+    <label>氏名<input data-f="lead_name" value="${escHtml(prefill.lead_name ?? '')}"></label>
+    <label>会社名<input data-f="company_name" value="${escHtml(prefill.company_name ?? '')}"></label>
+    <label>電話番号<input data-f="phone" value="${escHtml(prefill.phone ?? '')}"></label>
+    <label>メールアドレス<input data-f="email" value="${escHtml(prefill.email ?? '')}"></label>
+    <label>流入経路${buildSelectHtml('source', LEAD_SOURCE_OPTIONS, prefill.source)}</label>
+    <label>ステータス${buildSelectHtml('status', LEAD_STATUS_OPTIONS, prefill.status)}</label>
+    <label>メモ<textarea data-f="memo">${escHtml(prefill.memo ?? '')}</textarea></label>
+    <button class="exh-form-submit">${isEdit ? '✅ 更新する' : '✅ 登録する'}</button>
+  `;
+  wrap.querySelector('.exh-form-submit')!.addEventListener('click', () => {
+    void registerLeadRecord(wrap, isEdit ? String(prefill._recordId) : undefined);
+  });
+  getMsgsEl().appendChild(wrap);
+  scrollToBottom();
+}
+
 async function registerAccountRecord(form: HTMLElement, recordId?: string): Promise<void> {
   const record = {
     company_name: { value: fieldValue(form, 'company_name') },
@@ -365,6 +426,89 @@ async function registerOpportunityRecord(form: HTMLElement, recordId?: string): 
     pushAI(recordId ? '案件情報を更新しました。' : '案件を登録しました。');
   } catch (err) {
     pushAI('登録・更新に失敗しました: ' + formatApiError(err));
+  }
+}
+
+async function registerLeadRecord(form: HTMLElement, recordId?: string): Promise<void> {
+  const record = {
+    lead_name: { value: fieldValue(form, 'lead_name') },
+    company_name: { value: fieldValue(form, 'company_name') },
+    phone: { value: fieldValue(form, 'phone') },
+    email: { value: fieldValue(form, 'email') },
+    source: { value: fieldValue(form, 'source') },
+    status: { value: fieldValue(form, 'status') },
+    memo: { value: fieldValue(form, 'memo') },
+  };
+  const appId = Number(CONFIG.leadAppId);
+  try {
+    if (recordId) {
+      await kintone.api('/k/v1/record', 'PUT', { app: appId, id: Number(recordId), record });
+    } else {
+      await kintone.api('/k/v1/record', 'POST', { app: appId, record });
+    }
+    pushAI(recordId ? 'リード情報を更新しました。' : 'リードを登録しました。');
+  } catch (err) {
+    pushAI('登録・更新に失敗しました: ' + formatApiError(err));
+  }
+}
+
+function resizeAndCompressImage(file: File): Promise<{ base64: string; type: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('画像の読み込みに失敗しました。'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('画像の読み込みに失敗しました。'));
+      img.onload = () => {
+        const { width, height } = computeResizedDimensions(img.width, img.height, RESIZE_MAX_PX);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas未対応のブラウザです。'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+        resolve({ base64: dataUrl.split(',')[1] ?? '', type: 'image/jpeg' });
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleMeishiUpload(file: File): Promise<void> {
+  if (file.size > MAX_IMAGE_BYTES) {
+    pushAI('ファイルサイズが4MBを超えています。別の画像を選択してください。');
+    return;
+  }
+
+  const loadingEl = pushLoadingBubble('📷 名刺を解析中...');
+
+  try {
+    const { base64, type } = await resizeAndCompressImage(file);
+    const resp = await kintone.proxy(
+      CONFIG.meishiWebhookUrl,
+      'POST',
+      { 'Content-Type': 'application/json', 'x-webhook-secret': CONFIG.webhookSecret },
+      JSON.stringify({ image_base64: base64, image_type: type }),
+    );
+    loadingEl.remove();
+
+    const raw = String(resp[0] ?? '').trim();
+    const result = JSON.parse(raw) as MeishiResult;
+
+    if (result.isDuplicate && result.duplicateRecordId) {
+      pushAI(
+        `⚠️ 類似のリードが既に登録されている可能性があります(ID: ${result.duplicateRecordId})。内容を確認のうえ登録してください。`,
+      );
+    }
+    pushLeadForm({ ...result.data, source: '名刺' });
+  } catch (err) {
+    loadingEl.remove();
+    pushAI('名刺の解析に失敗しました: ' + formatApiError(err));
   }
 }
 

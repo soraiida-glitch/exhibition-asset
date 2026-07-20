@@ -31,5 +31,8 @@ export default defineConfig({
     __ACCOUNT_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdAccount'))),
     __OPPORTUNITY_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdOpportunity'))),
     __LEAD_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdLead'))),
+    __MEISHI_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_MEISHI_WEBHOOK_URL', env.n8nMeishiWebhookUrl),
+    ),
   },
 });

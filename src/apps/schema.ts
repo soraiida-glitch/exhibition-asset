@@ -18,6 +18,8 @@ export const ACCOUNT_INDUSTRY_OPTIONS = [
   'その他',
 ];
 export const ACCOUNT_STATUS_OPTIONS = ['見込み', '取引中', '休眠'];
+export const LEAD_SOURCE_OPTIONS = ['名刺', '問い合わせフォーム', '紹介', 'その他'];
+export const LEAD_STATUS_OPTIONS = ['未対応', '対応中', '変換済み', '対象外'];
 export const OPPORTUNITY_STAGE_OPTIONS = [
   '初期接触',
   'ヒアリング',
@@ -99,13 +101,13 @@ export const LEAD_FIELDS: KintoneFieldProperties = {
     type: 'DROP_DOWN',
     code: 'source',
     label: '流入経路',
-    options: dropdownOptions(['名刺', '問い合わせフォーム', '紹介', 'その他']),
+    options: dropdownOptions(LEAD_SOURCE_OPTIONS),
   },
   status: {
     type: 'DROP_DOWN',
     code: 'status',
     label: 'ステータス',
-    options: dropdownOptions(['未対応', '対応中', '変換済み', '対象外']),
+    options: dropdownOptions(LEAD_STATUS_OPTIONS),
     defaultValue: '未対応',
   },
   memo: {

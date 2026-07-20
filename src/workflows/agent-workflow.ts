@@ -69,7 +69,7 @@ function offsetPositions(startX: number, y: number, count: number, gap = 220): [
 }
 
 export function buildAgentWorkflow(config: AgentWorkflowConfig) {
-  const positions = offsetPositions(0, 300, 12);
+  const positions = offsetPositions(0, 300, 13);
   let p = 0;
   const nextPos = () => positions[p++];
 
