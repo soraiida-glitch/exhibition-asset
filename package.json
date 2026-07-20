@@ -1,0 +1,33 @@
+{
+  "name": "exhibition-asset",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI活用型顧客管理システム(kintone版) - exhibition_ アセット",
+  "scripts": {
+    "setup:apps": "tsx src/scripts/setup-kintone-apps.ts",
+    "check:n8n": "tsx src/scripts/check-n8n-connectivity.ts",
+    "gen:types": "tsx src/scripts/generate-types.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@kintone/rest-api-client": "^6.2.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.7.0",
+    "@kintone/dts-gen": "^9.0.8",
+    "@types/node": "^20.14.0",
+    "eslint": "^9.7.0",
+    "prettier": "^3.3.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^2.0.0"
+  }
+}
