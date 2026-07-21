@@ -59,12 +59,18 @@ const appNameMap = ${JSON.stringify(appNameMap)};
 const body = $input.item.json.body || {};
 const appId = body.app && body.app.id;
 const appName = appNameMap[String(appId)];
+const record = body.record || {};
+// The record's own $id (present for ADD/EDIT_RECORD) is the real kintone record ID — there is
+// no top-level "recordId" field on a real kintone webhook payload (only a per-event "id", which
+// is the webhook event's own UUID, not the record's). DELETE_RECORD carries no record body, so
+// it relies on whatever id kintone does put at the top level for that case.
+const recordId = (record['$id'] && record['$id'].value) || body.recordId || '';
 return [{ json: {
   appName: appName || '',
   type: body.type || '',
-  record: body.record || {},
+  record,
   appId: appId || '',
-  recordId: (body.recordId != null ? String(body.recordId) : ''),
+  recordId: String(recordId),
 } }];
 `.trim(),
       },
