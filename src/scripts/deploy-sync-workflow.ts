@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import { loadEnv, patchEnvFile, requireAppId } from '../config/env';
 import { N8nClient } from '../lib/n8n-client';
 import { SYNC_WEBHOOK_PATH, buildSyncWorkflow } from '../workflows/sync-workflow';
@@ -13,14 +12,7 @@ function requireEnvValue(name: string, value: string | undefined): string {
 async function main() {
   const env = loadEnv();
 
-  const kintoneWebhookToken = env.kintoneWebhookToken || crypto.randomBytes(24).toString('hex');
-  if (!env.kintoneWebhookToken) {
-    patchEnvFile({ KINTONE_WEBHOOK_TOKEN: kintoneWebhookToken });
-    console.log('Generated a new KINTONE_WEBHOOK_TOKEN and wrote it to .env');
-  }
-
   const workflow = buildSyncWorkflow({
-    kintoneWebhookToken,
     openaiApiKey: requireEnvValue('OPENAI_API_KEY', env.openaiApiKey),
     pineconeApiKey: requireEnvValue('PINECONE_API_KEY', env.pineconeApiKey),
     pineconeHost: requireEnvValue('PINECONE_HOST', env.pineconeHost),

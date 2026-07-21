@@ -4,7 +4,6 @@ export const SYNC_WORKFLOW_NAME = '[kintone] Pineconeシンク';
 export const SYNC_WEBHOOK_PATH = 'exhibition-kintone-sync';
 
 export interface SyncWorkflowConfig {
-  kintoneWebhookToken: string;
   openaiApiKey: string;
   pineconeApiKey: string;
   pineconeHost: string;
@@ -19,7 +18,7 @@ function offsetPositions(startX: number, y: number, count: number, gap = 220): [
 }
 
 export function buildSyncWorkflow(config: SyncWorkflowConfig) {
-  const positions = offsetPositions(0, 300, 6);
+  const positions = offsetPositions(0, 300, 5);
   let p = 0;
   const nextPos = () => positions[p++];
 
@@ -45,22 +44,22 @@ export function buildSyncWorkflow(config: SyncWorkflowConfig) {
       },
     },
     {
-      id: 'verify_webhook_token',
-      name: 'Verify Webhook Token',
+      id: 'parse_webhook_payload',
+      name: 'Parse Webhook Payload',
       type: 'n8n-nodes-base.code',
       typeVersion: 2,
       position: nextPos(),
       parameters: {
+        // kintone's own Webhook feature has no verification-token or auth field at all in its UI
+        // (confirmed against the real settings screen) — unlike Relava's meishi webhook, which
+        // relied on URL-path obscurity alone, this is the same tradeoff here, not a check we can
+        // actually enforce. This node only normalizes the payload shape, nothing more.
         jsCode: `
-const expected = ${JSON.stringify(config.kintoneWebhookToken)};
 const appNameMap = ${JSON.stringify(appNameMap)};
-const headers = $input.item.json.headers || {};
-const provided = headers['x-cybozu-webhook-token'];
 const body = $input.item.json.body || {};
 const appId = body.app && body.app.id;
 const appName = appNameMap[String(appId)];
 return [{ json: {
-  valid: provided === expected && !!appName,
   appName: appName || '',
   type: body.type || '',
   record: body.record || {},
@@ -69,26 +68,6 @@ return [{ json: {
 } }];
 `.trim(),
       },
-    },
-    {
-      id: 'token_valid_if',
-      name: 'Token Valid?',
-      type: 'n8n-nodes-base.if',
-      typeVersion: 1,
-      position: nextPos(),
-      parameters: {
-        conditions: {
-          boolean: [{ value1: '={{$json.valid}}', value2: true }],
-        },
-      },
-    },
-    {
-      id: 'stop_invalid',
-      name: 'Stop (Invalid Token)',
-      type: 'n8n-nodes-base.noOp',
-      typeVersion: 1,
-      position: [positions[2][0] + 220, positions[2][1] + 200] as [number, number],
-      parameters: {},
     },
     {
       id: 'record_to_text',
@@ -137,7 +116,7 @@ return [{ json: { action: 'upsert', vectorId, text, metadata } }];
       name: 'Pinecone Delete',
       type: 'n8n-nodes-base.httpRequest',
       typeVersion: 4.2,
-      position: [positions[5][0] + 220, positions[5][1] - 100] as [number, number],
+      position: [positions[4][0] + 220, positions[4][1] - 100] as [number, number],
       parameters: {
         method: 'POST',
         url: `https://${config.pineconeHost}/vectors/delete`,
@@ -154,7 +133,7 @@ return [{ json: { action: 'upsert', vectorId, text, metadata } }];
       name: 'Embed Text',
       type: 'n8n-nodes-base.httpRequest',
       typeVersion: 4.2,
-      position: [positions[5][0] + 220, positions[5][1] + 100] as [number, number],
+      position: [positions[4][0] + 220, positions[4][1] + 100] as [number, number],
       parameters: {
         method: 'POST',
         url: 'https://api.openai.com/v1/embeddings',
@@ -176,7 +155,7 @@ return [{ json: { action: 'upsert', vectorId, text, metadata } }];
       name: 'Pinecone Upsert',
       type: 'n8n-nodes-base.httpRequest',
       typeVersion: 4.2,
-      position: [positions[5][0] + 440, positions[5][1] + 100] as [number, number],
+      position: [positions[4][0] + 440, positions[4][1] + 100] as [number, number],
       parameters: {
         method: 'POST',
         url: `https://${config.pineconeHost}/vectors/upsert`,
@@ -191,14 +170,8 @@ return [{ json: { action: 'upsert', vectorId, text, metadata } }];
   ];
 
   const connections = {
-    Webhook: { main: [[{ node: 'Verify Webhook Token', type: 'main', index: 0 }]] },
-    'Verify Webhook Token': { main: [[{ node: 'Token Valid?', type: 'main', index: 0 }]] },
-    'Token Valid?': {
-      main: [
-        [{ node: 'Record to Text', type: 'main', index: 0 }],
-        [{ node: 'Stop (Invalid Token)', type: 'main', index: 0 }],
-      ],
-    },
+    Webhook: { main: [[{ node: 'Parse Webhook Payload', type: 'main', index: 0 }]] },
+    'Parse Webhook Payload': { main: [[{ node: 'Record to Text', type: 'main', index: 0 }]] },
     'Record to Text': { main: [[{ node: 'Route by Action', type: 'main', index: 0 }]] },
     'Route by Action': {
       main: [

@@ -13,11 +13,14 @@ function requireEnvValue(name: string, value: string | undefined): string {
  * not valid" page, not a JSON API error — confirmed by direct testing, and no official kintone.dev
  * docs page could be found for it either). Registering webhooks is therefore a manual step, same
  * category as issuing API tokens.
+ *
+ * Also: kintone's actual Webhook settings screen has no verification-token/secret field at all
+ * (confirmed against kintone's own help docs) — sync-workflow.ts relies on the webhook path being
+ * unguessable, same tradeoff as the existing meishi webhook, not on any shared-secret check.
  */
 async function main() {
   const env = loadEnv();
   const webhookUrl = requireEnvValue('N8N_SYNC_WEBHOOK_URL', env.n8nSyncWebhookUrl);
-  const token = requireEnvValue('KINTONE_WEBHOOK_TOKEN', env.kintoneWebhookToken);
 
   const targets = [
     { label: 'exhibition_取引先', appId: requireAppId(env, 'kintoneAppIdAccount') },
@@ -38,8 +41,8 @@ kintone管理画面 → 対象アプリの設定 → Webhook → 追加
 
 設定値:
   URL: ${webhookUrl}
-  検証トークン: ${token}
   イベント: レコードの追加・編集・削除 すべてにチェック
+  (検証トークン等の入力欄はkintoneのWebhook設定画面には存在しません)
 
 設定後、対象アプリを再デプロイ(反映)してください。
 ========================================================================

@@ -22,7 +22,6 @@ export interface AppEnv {
   pineconeIndexName?: string;
   pineconeHost?: string;
   pineconeNamespace?: string;
-  kintoneWebhookToken?: string;
   kintoneAppIdAccount?: number;
   kintoneAppIdOpportunity?: number;
   kintoneAppIdLead?: number;
@@ -83,7 +82,6 @@ export function loadEnv(): AppEnv {
     pineconeIndexName: process.env.PINECONE_INDEX_NAME || undefined,
     pineconeHost: process.env.PINECONE_HOST || undefined,
     pineconeNamespace: process.env.PINECONE_NAMESPACE || undefined,
-    kintoneWebhookToken: process.env.KINTONE_WEBHOOK_TOKEN || undefined,
     kintoneAppIdAccount: parseOptionalAppId('KINTONE_APP_ID_ACCOUNT'),
     kintoneAppIdOpportunity: parseOptionalAppId('KINTONE_APP_ID_OPPORTUNITY'),
     kintoneAppIdLead: parseOptionalAppId('KINTONE_APP_ID_LEAD'),
