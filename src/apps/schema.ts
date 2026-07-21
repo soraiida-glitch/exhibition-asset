@@ -207,8 +207,106 @@ export function buildOpportunityFields(accountAppId: number): KintoneFieldProper
       code: 'closing_advice',
       label: 'クロージングアドバイス(JSON)',
     },
+    customer_issue: {
+      type: 'MULTI_LINE_TEXT',
+      code: 'customer_issue',
+      label: '顧客の課題',
+    },
+    meeting_notes: {
+      type: 'MULTI_LINE_TEXT',
+      code: 'meeting_notes',
+      label: '商談メモ',
+    },
   };
 }
+
+/**
+ * exhibition_ロールプレイセッション — one record per finished roleplay practice run (phase 5),
+ * written by the roleplay workflow's feedback step. The conversation itself is held client-side
+ * and never persisted mid-session; only the final transcript + feedback are saved here.
+ */
+export const ROLEPLAY_SESSION_FIELDS: KintoneFieldProperties = {
+  deal_record_id: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'deal_record_id',
+    label: '案件レコードID',
+  },
+  deal_name: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'deal_name',
+    label: '案件名',
+  },
+  trainee_name: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'trainee_name',
+    label: '練習者名',
+  },
+  roleplay_datetime: {
+    type: 'DATETIME',
+    code: 'roleplay_datetime',
+    label: '実施日時',
+  },
+  ai_persona: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'ai_persona',
+    label: '顧客ペルソナ(JSON)',
+  },
+  conversation_log: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'conversation_log',
+    label: '会話ログ',
+  },
+  feedback: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'feedback',
+    label: 'フィードバック(JSON)',
+  },
+  total_score: {
+    type: 'NUMBER',
+    code: 'total_score',
+    label: '総合スコア',
+  },
+  hearing_score: {
+    type: 'NUMBER',
+    code: 'hearing_score',
+    label: 'ヒアリング力',
+  },
+  issue_score: {
+    type: 'NUMBER',
+    code: 'issue_score',
+    label: '課題理解力',
+  },
+  proposal_score: {
+    type: 'NUMBER',
+    code: 'proposal_score',
+    label: '提案力',
+  },
+  objection_score: {
+    type: 'NUMBER',
+    code: 'objection_score',
+    label: '反論対応力',
+  },
+  closing_score: {
+    type: 'NUMBER',
+    code: 'closing_score',
+    label: 'クロージング力',
+  },
+  good_points: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'good_points',
+    label: '良かった点',
+  },
+  improvement_points: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'improvement_points',
+    label: '改善点',
+  },
+  next_training_theme: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'next_training_theme',
+    label: '次回の練習テーマ',
+  },
+};
 
 export const DAILY_ADVICE_STATUS_OPTIONS = ['完了', 'エラー'];
 

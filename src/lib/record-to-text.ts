@@ -40,6 +40,8 @@ export function recordToText(appName: string, record: KintoneRecordFields): stri
       'クロージング予定日: ' + val(record.close_date),
       '担当者: ' + val(record.owner),
       '概要: ' + val(record.description),
+      '顧客の課題: ' + val(record.customer_issue),
+      '商談メモ: ' + val(record.meeting_notes),
     ];
   } else if (appName === 'リード') {
     parts = [

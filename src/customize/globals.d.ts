@@ -6,3 +6,8 @@ declare const __LEAD_APP_ID__: string;
 declare const __MEISHI_WEBHOOK_URL__: string;
 declare const __CLOSING_ADVICE_WEBHOOK_URL__: string;
 declare const __DAILY_ADVICE_APP_ID__: string;
+declare const __ROLEPLAY_START_WEBHOOK_URL__: string;
+declare const __ROLEPLAY_CHAT_WEBHOOK_URL__: string;
+declare const __ROLEPLAY_FEEDBACK_WEBHOOK_URL__: string;
+declare const __TRANSCRIBE_WEBHOOK_URL__: string;
+declare const __TTS_WEBHOOK_URL__: string;

@@ -18,6 +18,11 @@ export interface AppEnv {
   n8nContactFormWebhookUrl?: string;
   n8nSyncWebhookUrl?: string;
   n8nClosingAdviceWebhookUrl?: string;
+  n8nRoleplayStartWebhookUrl?: string;
+  n8nRoleplayChatWebhookUrl?: string;
+  n8nRoleplayFeedbackWebhookUrl?: string;
+  n8nTranscribeWebhookUrl?: string;
+  n8nTtsWebhookUrl?: string;
   pineconeApiKey?: string;
   pineconeIndexName?: string;
   pineconeHost?: string;
@@ -27,11 +32,13 @@ export interface AppEnv {
   kintoneAppIdLead?: number;
   kintoneAppIdConversationLog?: number;
   kintoneAppIdDailyAdvice?: number;
+  kintoneAppIdRoleplaySession?: number;
   kintoneApiTokenAccount?: string;
   kintoneApiTokenOpportunity?: string;
   kintoneApiTokenLead?: string;
   kintoneApiTokenConversationLog?: string;
   kintoneApiTokenDailyAdvice?: string;
+  kintoneApiTokenRoleplaySession?: string;
 }
 
 type AppIdKey =
@@ -39,7 +46,8 @@ type AppIdKey =
   | 'kintoneAppIdOpportunity'
   | 'kintoneAppIdLead'
   | 'kintoneAppIdConversationLog'
-  | 'kintoneAppIdDailyAdvice';
+  | 'kintoneAppIdDailyAdvice'
+  | 'kintoneAppIdRoleplaySession';
 
 const REQUIRED_KEYS = [
   'KINTONE_SUBDOMAIN',
@@ -78,6 +86,11 @@ export function loadEnv(): AppEnv {
     n8nContactFormWebhookUrl: process.env.N8N_CONTACT_FORM_WEBHOOK_URL || undefined,
     n8nSyncWebhookUrl: process.env.N8N_SYNC_WEBHOOK_URL || undefined,
     n8nClosingAdviceWebhookUrl: process.env.N8N_CLOSING_ADVICE_WEBHOOK_URL || undefined,
+    n8nRoleplayStartWebhookUrl: process.env.N8N_ROLEPLAY_START_WEBHOOK_URL || undefined,
+    n8nRoleplayChatWebhookUrl: process.env.N8N_ROLEPLAY_CHAT_WEBHOOK_URL || undefined,
+    n8nRoleplayFeedbackWebhookUrl: process.env.N8N_ROLEPLAY_FEEDBACK_WEBHOOK_URL || undefined,
+    n8nTranscribeWebhookUrl: process.env.N8N_TRANSCRIBE_WEBHOOK_URL || undefined,
+    n8nTtsWebhookUrl: process.env.N8N_TTS_WEBHOOK_URL || undefined,
     pineconeApiKey: process.env.PINECONE_API_KEY || undefined,
     pineconeIndexName: process.env.PINECONE_INDEX_NAME || undefined,
     pineconeHost: process.env.PINECONE_HOST || undefined,
@@ -87,11 +100,13 @@ export function loadEnv(): AppEnv {
     kintoneAppIdLead: parseOptionalAppId('KINTONE_APP_ID_LEAD'),
     kintoneAppIdConversationLog: parseOptionalAppId('KINTONE_APP_ID_CONVERSATION_LOG'),
     kintoneAppIdDailyAdvice: parseOptionalAppId('KINTONE_APP_ID_DAILY_ADVICE'),
+    kintoneAppIdRoleplaySession: parseOptionalAppId('KINTONE_APP_ID_ROLEPLAY_SESSION'),
     kintoneApiTokenAccount: process.env.KINTONE_API_TOKEN_ACCOUNT || undefined,
     kintoneApiTokenOpportunity: process.env.KINTONE_API_TOKEN_OPPORTUNITY || undefined,
     kintoneApiTokenLead: process.env.KINTONE_API_TOKEN_LEAD || undefined,
     kintoneApiTokenConversationLog: process.env.KINTONE_API_TOKEN_CONVERSATION_LOG || undefined,
     kintoneApiTokenDailyAdvice: process.env.KINTONE_API_TOKEN_DAILY_ADVICE || undefined,
+    kintoneApiTokenRoleplaySession: process.env.KINTONE_API_TOKEN_ROLEPLAY_SESSION || undefined,
   };
 }
 

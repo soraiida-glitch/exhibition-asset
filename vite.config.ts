@@ -38,5 +38,18 @@ export default defineConfig({
       requireEnvValue('N8N_CLOSING_ADVICE_WEBHOOK_URL', env.n8nClosingAdviceWebhookUrl),
     ),
     __DAILY_ADVICE_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdDailyAdvice'))),
+    __ROLEPLAY_START_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_ROLEPLAY_START_WEBHOOK_URL', env.n8nRoleplayStartWebhookUrl),
+    ),
+    __ROLEPLAY_CHAT_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_ROLEPLAY_CHAT_WEBHOOK_URL', env.n8nRoleplayChatWebhookUrl),
+    ),
+    __ROLEPLAY_FEEDBACK_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_ROLEPLAY_FEEDBACK_WEBHOOK_URL', env.n8nRoleplayFeedbackWebhookUrl),
+    ),
+    __TRANSCRIBE_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_TRANSCRIBE_WEBHOOK_URL', env.n8nTranscribeWebhookUrl),
+    ),
+    __TTS_WEBHOOK_URL__: JSON.stringify(requireEnvValue('N8N_TTS_WEBHOOK_URL', env.n8nTtsWebhookUrl)),
   },
 });

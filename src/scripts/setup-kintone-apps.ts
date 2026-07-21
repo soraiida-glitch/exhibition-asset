@@ -7,6 +7,7 @@ import {
   CONVERSATION_LOG_FIELDS,
   DAILY_ADVICE_FIELDS,
   LEAD_FIELDS,
+  ROLEPLAY_SESSION_FIELDS,
   buildOpportunityFields,
 } from '../apps/schema';
 
@@ -59,19 +60,40 @@ async function main() {
     },
   });
 
-  console.log('4/5 Creating exhibition_秘書AI会話ログ ...');
+  console.log('Ensuring exhibition_案件.customer_issue / meeting_notes fields exist (phase 5) ...');
+  await kintone.ensureFields(opportunityAppId, {
+    customer_issue: {
+      type: 'MULTI_LINE_TEXT',
+      code: 'customer_issue',
+      label: '顧客の課題',
+    },
+    meeting_notes: {
+      type: 'MULTI_LINE_TEXT',
+      code: 'meeting_notes',
+      label: '商談メモ',
+    },
+  });
+
+  console.log('4/6 Creating exhibition_秘書AI会話ログ ...');
   const conversationLogAppId = await kintone.createAndDeployApp(
     'exhibition_秘書AI会話ログ',
     CONVERSATION_LOG_FIELDS,
   );
   console.log(`   -> live app id ${conversationLogAppId}`);
 
-  console.log('5/5 Creating exhibition_デイリーアドバイス ...');
+  console.log('5/6 Creating exhibition_デイリーアドバイス ...');
   const dailyAdviceAppId = await kintone.createAndDeployApp(
     'exhibition_デイリーアドバイス',
     DAILY_ADVICE_FIELDS,
   );
   console.log(`   -> live app id ${dailyAdviceAppId}`);
+
+  console.log('6/6 Creating exhibition_ロールプレイセッション ...');
+  const roleplaySessionAppId = await kintone.createAndDeployApp(
+    'exhibition_ロールプレイセッション',
+    ROLEPLAY_SESSION_FIELDS,
+  );
+  console.log(`   -> live app id ${roleplaySessionAppId}`);
 
   const appIds = {
     account: accountAppId,
@@ -79,6 +101,7 @@ async function main() {
     lead: leadAppId,
     conversationLog: conversationLogAppId,
     dailyAdvice: dailyAdviceAppId,
+    roleplaySession: roleplaySessionAppId,
   };
   fs.writeFileSync(APP_IDS_PATH, JSON.stringify(appIds, null, 2));
   console.log(`Wrote ${APP_IDS_PATH}`);
@@ -89,6 +112,7 @@ async function main() {
     KINTONE_APP_ID_LEAD: String(leadAppId),
     KINTONE_APP_ID_CONVERSATION_LOG: String(conversationLogAppId),
     KINTONE_APP_ID_DAILY_ADVICE: String(dailyAdviceAppId),
+    KINTONE_APP_ID_ROLEPLAY_SESSION: String(roleplaySessionAppId),
   });
   console.log('Wrote KINTONE_APP_ID_* into .env');
 
@@ -96,12 +120,13 @@ async function main() {
 ========================================================================
 次の手動ステップ（kintone REST APIでは自動化できません）:
 
-kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の5アプリで実行:
-  - exhibition_取引先          (app id ${accountAppId})
-  - exhibition_案件            (app id ${opportunityAppId})
-  - exhibition_リード          (app id ${leadAppId})
-  - exhibition_秘書AI会話ログ   (app id ${conversationLogAppId})
-  - exhibition_デイリーアドバイス (app id ${dailyAdviceAppId})
+kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の6アプリで実行:
+  - exhibition_取引先              (app id ${accountAppId})
+  - exhibition_案件                (app id ${opportunityAppId})
+  - exhibition_リード              (app id ${leadAppId})
+  - exhibition_秘書AI会話ログ       (app id ${conversationLogAppId})
+  - exhibition_デイリーアドバイス    (app id ${dailyAdviceAppId})
+  - exhibition_ロールプレイセッション (app id ${roleplaySessionAppId})
 
 必要な権限: レコードの閲覧 / レコードの追加 / レコードの編集
 
@@ -111,6 +136,7 @@ kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を
   KINTONE_API_TOKEN_LEAD=...
   KINTONE_API_TOKEN_CONVERSATION_LOG=...
   KINTONE_API_TOKEN_DAILY_ADVICE=...
+  KINTONE_API_TOKEN_ROLEPLAY_SESSION=...
 ========================================================================
 `);
 }

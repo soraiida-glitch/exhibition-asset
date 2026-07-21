@@ -6,6 +6,7 @@ import {
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
 import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
+import { initRoleplay } from './roleplay';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -95,7 +96,7 @@ const conversationHistory: ChatMessage[] = [];
 let lastKintoneContext: KintoneContextRef | null = null;
 let msgSeq = 0;
 
-function escHtml(value: unknown): string {
+export function escHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => {
     switch (ch) {
       case '&':
@@ -308,7 +309,7 @@ function pushAI(text: string, data?: AgentResponse): void {
   }
 }
 
-function formatApiError(err: unknown): string {
+export function formatApiError(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (err && typeof err === 'object') {
     const obj = err as { message?: unknown; errors?: unknown };
@@ -700,6 +701,7 @@ kintone.events.on(EVENTS, (event) => {
   const appId = String(kintone.app.getId() || '');
   if (appId === CONFIG.opportunityAppId && event.type === 'app.record.detail.show') {
     injectClosingAdviceButton();
+    initRoleplay(appId);
   }
   if (event.type === 'portal.show' || event.type === 'mobile.portal.show') {
     injectDailyAdviceCard();
