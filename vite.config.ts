@@ -51,5 +51,17 @@ export default defineConfig({
       requireEnvValue('N8N_TRANSCRIBE_WEBHOOK_URL', env.n8nTranscribeWebhookUrl),
     ),
     __TTS_WEBHOOK_URL__: JSON.stringify(requireEnvValue('N8N_TTS_WEBHOOK_URL', env.n8nTtsWebhookUrl)),
+    __MEETING_LOG_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdMeetingLog'))),
+    __MEETING_LOG_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_MEETING_LOG_WEBHOOK_URL', env.n8nMeetingLogWebhookUrl),
+    ),
+    __ASSIGNEE_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdAssignee'))),
+    __SALES_SCORE_APP_ID__: JSON.stringify(String(requireAppId(env, 'kintoneAppIdSalesScore'))),
+    __SALES_SCORING_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_SALES_SCORING_WEBHOOK_URL', env.n8nSalesScoringWebhookUrl),
+    ),
+    __PROPOSAL_WEBHOOK_URL__: JSON.stringify(
+      requireEnvValue('N8N_PROPOSAL_WEBHOOK_URL', env.n8nProposalWebhookUrl),
+    ),
   },
 });

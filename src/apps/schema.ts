@@ -217,8 +217,28 @@ export function buildOpportunityFields(accountAppId: number): KintoneFieldProper
       code: 'meeting_notes',
       label: '商談メモ',
     },
+    proposal_url: {
+      type: 'LINK',
+      code: 'proposal_url',
+      label: '提案書URL (Box)',
+      protocol: 'WEB',
+    },
+    proposal_status: {
+      type: 'DROP_DOWN',
+      code: 'proposal_status',
+      label: '提案書ステータス',
+      options: dropdownOptions(PROPOSAL_STATUS_OPTIONS),
+      defaultValue: '未生成',
+    },
+    proposal_generated_at: {
+      type: 'DATETIME',
+      code: 'proposal_generated_at',
+      label: '提案書生成日時',
+    },
   };
 }
+
+export const PROPOSAL_STATUS_OPTIONS = ['未生成', '生成中', '完了', 'エラー'];
 
 /**
  * exhibition_ロールプレイセッション — one record per finished roleplay practice run (phase 5),
@@ -348,5 +368,190 @@ export const DAILY_ADVICE_FIELDS: KintoneFieldProperties = {
     label: 'ステータス',
     options: dropdownOptions(DAILY_ADVICE_STATUS_OPTIONS),
     defaultValue: '完了',
+  },
+};
+
+export const MEETING_LOG_STATUS_OPTIONS = ['処理中', '完了', 'エラー'];
+export const MEETING_LOG_SENTIMENT_OPTIONS = ['ポジティブ', 'ニュートラル', 'ネガティブ'];
+
+/**
+ * exhibition_商談ログ — one record per uploaded meeting recording (phase 6). The audio file is
+ * attached first (status 処理中) from the browser via kintone's own file-upload API, then the
+ * meeting-log n8n workflow downloads it by fileKey, transcribes it, and writes the analysis
+ * fields back — mirroring Salesforce-asset's MeetingAnalysis__c flow (upload now, analyze async).
+ */
+export const MEETING_LOG_FIELDS: KintoneFieldProperties = {
+  deal_record_id: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'deal_record_id',
+    label: '案件レコードID',
+  },
+  deal_name: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'deal_name',
+    label: '案件名',
+  },
+  audio_file: {
+    type: 'FILE',
+    code: 'audio_file',
+    label: '録音ファイル',
+  },
+  recorded_at: {
+    type: 'DATETIME',
+    code: 'recorded_at',
+    label: '録音日時',
+  },
+  transcript: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'transcript',
+    label: '文字起こし',
+  },
+  summary: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'summary',
+    label: '要約',
+  },
+  next_actions: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'next_actions',
+    label: 'ネクストアクション',
+  },
+  sentiment_score: {
+    type: 'NUMBER',
+    code: 'sentiment_score',
+    label: 'センチメントスコア',
+  },
+  sentiment_label: {
+    type: 'DROP_DOWN',
+    code: 'sentiment_label',
+    label: 'センチメント',
+    options: dropdownOptions(MEETING_LOG_SENTIMENT_OPTIONS),
+  },
+  keywords: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'keywords',
+    label: 'キーワード',
+  },
+  topics: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'topics',
+    label: 'トピック',
+  },
+  status: {
+    type: 'DROP_DOWN',
+    code: 'status',
+    label: 'ステータス',
+    options: dropdownOptions(MEETING_LOG_STATUS_OPTIONS),
+    defaultValue: '処理中',
+  },
+};
+
+export const ASSIGNEE_STATUS_OPTIONS = ['有効', '無効'];
+
+/**
+ * exhibition_担当者 — sales-rep master data for phase 6's scoring feature. Populated manually
+ * by the user via kintone's standard record UI (no custom registration form) since it's a small,
+ * infrequently-changed roster, not AI-generated data.
+ */
+export const ASSIGNEE_FIELDS: KintoneFieldProperties = {
+  assignee_code: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'assignee_code',
+    label: '担当者コード',
+    required: true,
+    unique: true,
+  },
+  assignee_name: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'assignee_name',
+    label: '担当者名',
+    required: true,
+  },
+  status: {
+    type: 'DROP_DOWN',
+    code: 'status',
+    label: 'ステータス',
+    options: dropdownOptions(ASSIGNEE_STATUS_OPTIONS),
+    defaultValue: '有効',
+  },
+};
+
+export const SALES_SCORE_RANK_OPTIONS = ['S', 'A', 'B', 'C', 'D'];
+export const SALES_SCORE_STATUS_OPTIONS = ['生成中', '完了', 'エラー'];
+
+/**
+ * exhibition_営業評価 — one record per (assignee_code, period_start, period_end), written by the
+ * sales-scoring n8n workflow. Unlike Salesforce's version (capped at 50 reps per run by Apex's
+ * @future callout governor limit), n8n has no such ceiling — a single workflow execution scores
+ * every active assignee via n8n's normal per-item node iteration.
+ */
+export const SALES_SCORE_FIELDS: KintoneFieldProperties = {
+  assignee_code: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'assignee_code',
+    label: '担当者コード',
+  },
+  assignee_name: {
+    type: 'SINGLE_LINE_TEXT',
+    code: 'assignee_name',
+    label: '担当者名',
+  },
+  period_start: {
+    type: 'DATE',
+    code: 'period_start',
+    label: '対象期間開始',
+  },
+  period_end: {
+    type: 'DATE',
+    code: 'period_end',
+    label: '対象期間終了',
+  },
+  exec_rate: {
+    type: 'NUMBER',
+    code: 'exec_rate',
+    label: 'アクション実行率',
+  },
+  behavior_score: {
+    type: 'NUMBER',
+    code: 'behavior_score',
+    label: '行動スコア',
+  },
+  outcome_score: {
+    type: 'NUMBER',
+    code: 'outcome_score',
+    label: '成果スコア',
+  },
+  total_score: {
+    type: 'NUMBER',
+    code: 'total_score',
+    label: '総合スコア',
+  },
+  score_rank: {
+    type: 'DROP_DOWN',
+    code: 'score_rank',
+    label: 'ランク',
+    options: dropdownOptions(SALES_SCORE_RANK_OPTIONS),
+  },
+  ai_comment: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'ai_comment',
+    label: 'AIコメント',
+  },
+  detail_json: {
+    type: 'MULTI_LINE_TEXT',
+    code: 'detail_json',
+    label: '詳細(JSON)',
+  },
+  status: {
+    type: 'DROP_DOWN',
+    code: 'status',
+    label: 'ステータス',
+    options: dropdownOptions(SALES_SCORE_STATUS_OPTIONS),
+    defaultValue: '生成中',
+  },
+  generated_at: {
+    type: 'DATETIME',
+    code: 'generated_at',
+    label: '生成日時',
   },
 };

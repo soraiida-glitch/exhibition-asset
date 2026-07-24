@@ -23,6 +23,13 @@ export interface AppEnv {
   n8nRoleplayFeedbackWebhookUrl?: string;
   n8nTranscribeWebhookUrl?: string;
   n8nTtsWebhookUrl?: string;
+  n8nMeetingLogWebhookUrl?: string;
+  n8nSalesScoringWebhookUrl?: string;
+  n8nProposalWebhookUrl?: string;
+  boxClientId?: string;
+  boxClientSecret?: string;
+  boxEnterpriseId?: string;
+  boxFolderId?: string;
   pineconeApiKey?: string;
   pineconeIndexName?: string;
   pineconeHost?: string;
@@ -33,12 +40,18 @@ export interface AppEnv {
   kintoneAppIdConversationLog?: number;
   kintoneAppIdDailyAdvice?: number;
   kintoneAppIdRoleplaySession?: number;
+  kintoneAppIdMeetingLog?: number;
+  kintoneAppIdAssignee?: number;
+  kintoneAppIdSalesScore?: number;
   kintoneApiTokenAccount?: string;
   kintoneApiTokenOpportunity?: string;
   kintoneApiTokenLead?: string;
   kintoneApiTokenConversationLog?: string;
   kintoneApiTokenDailyAdvice?: string;
   kintoneApiTokenRoleplaySession?: string;
+  kintoneApiTokenMeetingLog?: string;
+  kintoneApiTokenAssignee?: string;
+  kintoneApiTokenSalesScore?: string;
 }
 
 type AppIdKey =
@@ -47,7 +60,10 @@ type AppIdKey =
   | 'kintoneAppIdLead'
   | 'kintoneAppIdConversationLog'
   | 'kintoneAppIdDailyAdvice'
-  | 'kintoneAppIdRoleplaySession';
+  | 'kintoneAppIdRoleplaySession'
+  | 'kintoneAppIdMeetingLog'
+  | 'kintoneAppIdAssignee'
+  | 'kintoneAppIdSalesScore';
 
 const REQUIRED_KEYS = [
   'KINTONE_SUBDOMAIN',
@@ -91,6 +107,13 @@ export function loadEnv(): AppEnv {
     n8nRoleplayFeedbackWebhookUrl: process.env.N8N_ROLEPLAY_FEEDBACK_WEBHOOK_URL || undefined,
     n8nTranscribeWebhookUrl: process.env.N8N_TRANSCRIBE_WEBHOOK_URL || undefined,
     n8nTtsWebhookUrl: process.env.N8N_TTS_WEBHOOK_URL || undefined,
+    n8nMeetingLogWebhookUrl: process.env.N8N_MEETING_LOG_WEBHOOK_URL || undefined,
+    n8nSalesScoringWebhookUrl: process.env.N8N_SALES_SCORING_WEBHOOK_URL || undefined,
+    n8nProposalWebhookUrl: process.env.N8N_PROPOSAL_WEBHOOK_URL || undefined,
+    boxClientId: process.env.BOX_CLIENT_ID || undefined,
+    boxClientSecret: process.env.BOX_CLIENT_SECRET || undefined,
+    boxEnterpriseId: process.env.BOX_ENTERPRISE_ID || undefined,
+    boxFolderId: process.env.BOX_FOLDER_ID || undefined,
     pineconeApiKey: process.env.PINECONE_API_KEY || undefined,
     pineconeIndexName: process.env.PINECONE_INDEX_NAME || undefined,
     pineconeHost: process.env.PINECONE_HOST || undefined,
@@ -101,12 +124,18 @@ export function loadEnv(): AppEnv {
     kintoneAppIdConversationLog: parseOptionalAppId('KINTONE_APP_ID_CONVERSATION_LOG'),
     kintoneAppIdDailyAdvice: parseOptionalAppId('KINTONE_APP_ID_DAILY_ADVICE'),
     kintoneAppIdRoleplaySession: parseOptionalAppId('KINTONE_APP_ID_ROLEPLAY_SESSION'),
+    kintoneAppIdMeetingLog: parseOptionalAppId('KINTONE_APP_ID_MEETING_LOG'),
+    kintoneAppIdAssignee: parseOptionalAppId('KINTONE_APP_ID_ASSIGNEE'),
+    kintoneAppIdSalesScore: parseOptionalAppId('KINTONE_APP_ID_SALES_SCORE'),
     kintoneApiTokenAccount: process.env.KINTONE_API_TOKEN_ACCOUNT || undefined,
     kintoneApiTokenOpportunity: process.env.KINTONE_API_TOKEN_OPPORTUNITY || undefined,
     kintoneApiTokenLead: process.env.KINTONE_API_TOKEN_LEAD || undefined,
     kintoneApiTokenConversationLog: process.env.KINTONE_API_TOKEN_CONVERSATION_LOG || undefined,
     kintoneApiTokenDailyAdvice: process.env.KINTONE_API_TOKEN_DAILY_ADVICE || undefined,
     kintoneApiTokenRoleplaySession: process.env.KINTONE_API_TOKEN_ROLEPLAY_SESSION || undefined,
+    kintoneApiTokenMeetingLog: process.env.KINTONE_API_TOKEN_MEETING_LOG || undefined,
+    kintoneApiTokenAssignee: process.env.KINTONE_API_TOKEN_ASSIGNEE || undefined,
+    kintoneApiTokenSalesScore: process.env.KINTONE_API_TOKEN_SALES_SCORE || undefined,
   };
 }
 

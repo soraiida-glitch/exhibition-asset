@@ -4,10 +4,13 @@ import { loadEnv, patchEnvFile } from '../config/env';
 import { KintoneAdminClient } from '../lib/kintone-client';
 import {
   ACCOUNT_FIELDS,
+  ASSIGNEE_FIELDS,
   CONVERSATION_LOG_FIELDS,
   DAILY_ADVICE_FIELDS,
   LEAD_FIELDS,
+  MEETING_LOG_FIELDS,
   ROLEPLAY_SESSION_FIELDS,
+  SALES_SCORE_FIELDS,
   buildOpportunityFields,
 } from '../apps/schema';
 
@@ -88,12 +91,57 @@ async function main() {
   );
   console.log(`   -> live app id ${dailyAdviceAppId}`);
 
-  console.log('6/6 Creating exhibition_ロールプレイセッション ...');
+  console.log('6/9 Creating exhibition_ロールプレイセッション ...');
   const roleplaySessionAppId = await kintone.createAndDeployApp(
     'exhibition_ロールプレイセッション',
     ROLEPLAY_SESSION_FIELDS,
   );
   console.log(`   -> live app id ${roleplaySessionAppId}`);
+
+  console.log('Ensuring exhibition_案件.proposal_url / proposal_status / proposal_generated_at fields exist (phase 6) ...');
+  await kintone.ensureFields(opportunityAppId, {
+    proposal_url: {
+      type: 'LINK',
+      code: 'proposal_url',
+      label: '提案書URL (Box)',
+      protocol: 'WEB',
+    },
+    proposal_status: {
+      type: 'DROP_DOWN',
+      code: 'proposal_status',
+      label: '提案書ステータス',
+      options: {
+        未生成: { label: '未生成', index: '0' },
+        生成中: { label: '生成中', index: '1' },
+        完了: { label: '完了', index: '2' },
+        エラー: { label: 'エラー', index: '3' },
+      },
+      defaultValue: '未生成',
+    },
+    proposal_generated_at: {
+      type: 'DATETIME',
+      code: 'proposal_generated_at',
+      label: '提案書生成日時',
+    },
+  });
+
+  console.log('7/9 Creating exhibition_商談ログ ...');
+  const meetingLogAppId = await kintone.createAndDeployApp(
+    'exhibition_商談ログ',
+    MEETING_LOG_FIELDS,
+  );
+  console.log(`   -> live app id ${meetingLogAppId}`);
+
+  console.log('8/9 Creating exhibition_担当者 ...');
+  const assigneeAppId = await kintone.createAndDeployApp('exhibition_担当者', ASSIGNEE_FIELDS);
+  console.log(`   -> live app id ${assigneeAppId}`);
+
+  console.log('9/9 Creating exhibition_営業評価 ...');
+  const salesScoreAppId = await kintone.createAndDeployApp(
+    'exhibition_営業評価',
+    SALES_SCORE_FIELDS,
+  );
+  console.log(`   -> live app id ${salesScoreAppId}`);
 
   const appIds = {
     account: accountAppId,
@@ -102,6 +150,9 @@ async function main() {
     conversationLog: conversationLogAppId,
     dailyAdvice: dailyAdviceAppId,
     roleplaySession: roleplaySessionAppId,
+    meetingLog: meetingLogAppId,
+    assignee: assigneeAppId,
+    salesScore: salesScoreAppId,
   };
   fs.writeFileSync(APP_IDS_PATH, JSON.stringify(appIds, null, 2));
   console.log(`Wrote ${APP_IDS_PATH}`);
@@ -113,6 +164,9 @@ async function main() {
     KINTONE_APP_ID_CONVERSATION_LOG: String(conversationLogAppId),
     KINTONE_APP_ID_DAILY_ADVICE: String(dailyAdviceAppId),
     KINTONE_APP_ID_ROLEPLAY_SESSION: String(roleplaySessionAppId),
+    KINTONE_APP_ID_MEETING_LOG: String(meetingLogAppId),
+    KINTONE_APP_ID_ASSIGNEE: String(assigneeAppId),
+    KINTONE_APP_ID_SALES_SCORE: String(salesScoreAppId),
   });
   console.log('Wrote KINTONE_APP_ID_* into .env');
 
@@ -120,13 +174,16 @@ async function main() {
 ========================================================================
 次の手動ステップ（kintone REST APIでは自動化できません）:
 
-kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の6アプリで実行:
+kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の9アプリで実行:
   - exhibition_取引先              (app id ${accountAppId})
   - exhibition_案件                (app id ${opportunityAppId})
   - exhibition_リード              (app id ${leadAppId})
   - exhibition_秘書AI会話ログ       (app id ${conversationLogAppId})
   - exhibition_デイリーアドバイス    (app id ${dailyAdviceAppId})
   - exhibition_ロールプレイセッション (app id ${roleplaySessionAppId})
+  - exhibition_商談ログ            (app id ${meetingLogAppId})
+  - exhibition_担当者              (app id ${assigneeAppId})
+  - exhibition_営業評価            (app id ${salesScoreAppId})
 
 必要な権限: レコードの閲覧 / レコードの追加 / レコードの編集
 
@@ -137,6 +194,13 @@ kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を
   KINTONE_API_TOKEN_CONVERSATION_LOG=...
   KINTONE_API_TOKEN_DAILY_ADVICE=...
   KINTONE_API_TOKEN_ROLEPLAY_SESSION=...
+  KINTONE_API_TOKEN_MEETING_LOG=...
+  KINTONE_API_TOKEN_ASSIGNEE=...
+  KINTONE_API_TOKEN_SALES_SCORE=...
+
+exhibition_担当者アプリには、スコアリング対象にしたい担当者(担当者コード・担当者名)を
+手動でレコード登録してください(専用の登録フォームはありません、kintoneの通常のレコード
+追加UIをお使いください)。
 ========================================================================
 `);
 }

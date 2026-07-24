@@ -6,7 +6,10 @@ import {
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
 import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
+import { initMeetingLog } from './meeting-log';
+import { initProposal } from './proposal';
 import { initRoleplay } from './roleplay';
+import { initSalesScoring } from './sales-scoring';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -74,6 +77,8 @@ interface DailyAdviceAction {
   action?: string;
   reason?: string;
   relatedRecord?: string;
+  relatedRecordId?: string;
+  executed?: boolean;
 }
 
 const EVENTS = [
@@ -81,15 +86,20 @@ const EVENTS = [
   'app.record.detail.show',
   'app.record.create.show',
   'app.record.edit.show',
-  'portal.show',
+  'space.portal.show',
   'mobile.app.record.index.show',
   'mobile.app.record.detail.show',
-  'mobile.portal.show',
+  'mobile.space.portal.show',
 ];
 
 function genId(): string {
   return 'exh' + Math.random().toString(36).slice(2, 10);
 }
+
+// kintone's space-wide JS/CSS customization slot is global (there is no per-space attachment
+// point), so the daily-advice-card feature scopes itself to one space by checking event.spaceId
+// at runtime instead — chosen by the user to avoid the widget appearing on every space in the org.
+const DAILY_ADVICE_SPACE_ID = '2';
 
 const SESSION_ID = genId();
 const conversationHistory: ChatMessage[] = [];
@@ -172,7 +182,10 @@ function injectStyles(): void {
   padding: 12px; z-index: 9998; font-size: 13px; }
 .exh-daily-advice-title { font-weight: bold; margin-bottom: 8px; color: #2f6fed; }
 .exh-daily-advice-item { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+.exh-daily-advice-item label { cursor: pointer; display: flex; align-items: flex-start; gap: 6px; }
+.exh-daily-advice-item.exh-daily-advice-done { color: #999; text-decoration: line-through; }
 .exh-daily-advice-related { color: #888; font-size: 11px; }
+.exh-daily-advice-error { color: #d33; font-size: 11px; padding-bottom: 6px; }
 `;
   document.head.appendChild(style);
 }
@@ -641,6 +654,13 @@ function renderClosingAdvice(panel: HTMLElement, advice: ClosingAdvice): void {
   `;
 }
 
+interface DailyAdviceState {
+  recordId: string;
+  parsed: { context_summary?: string; actions: DailyAdviceAction[] };
+}
+
+let currentDailyAdvice: DailyAdviceState | null = null;
+
 function injectDailyAdviceCard(): void {
   if (document.getElementById('exh-daily-advice-card')) return;
 
@@ -649,6 +669,13 @@ function injectDailyAdviceCard(): void {
   card.innerHTML =
     '<div class="exh-daily-advice-title">📌 本日のアドバイス</div><div id="exh-daily-advice-body">読み込み中...</div>';
   document.body.appendChild(card);
+
+  card.querySelector('#exh-daily-advice-body')!.addEventListener('change', (e) => {
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement && target.classList.contains('exh-daily-advice-checkbox')) {
+      void toggleActionExecuted(Number(target.dataset.idx));
+    }
+  });
 
   void loadDailyAdvice();
 }
@@ -663,12 +690,13 @@ async function loadDailyAdvice(): Promise<void> {
     const appId = Number(CONFIG.dailyAdviceAppId);
     const query = `advice_date = "${today}" and assignee_code = "${user.code.replace(/"/g, '')}" limit 1`;
     const result = (await kintone.api('/k/v1/records', 'GET', { app: appId, query })) as {
-      records: Array<{ advice_json?: { value: string } }>;
+      records: Array<{ $id?: { value: string }; advice_json?: { value: string } }>;
     };
 
     const record = result.records[0];
-    if (!record?.advice_json) {
+    if (!record?.advice_json || !record.$id) {
       bodyEl.textContent = '本日のアドバイスはまだありません。';
+      currentDailyAdvice = null;
       return;
     }
 
@@ -676,21 +704,60 @@ async function loadDailyAdvice(): Promise<void> {
     const actions = parsed.actions || [];
     if (!actions.length) {
       bodyEl.textContent = '本日のアドバイスはまだありません。';
+      currentDailyAdvice = null;
       return;
     }
 
-    const priorityIcon = (priority?: string) =>
-      priority === 'high' ? '🔴' : priority === 'medium' ? '🟡' : '🟢';
-    bodyEl.innerHTML = actions
-      .map((a) => {
-        const related = a.relatedRecord
-          ? ` <span class="exh-daily-advice-related">(${escHtml(a.relatedRecord)})</span>`
-          : '';
-        return `<div class="exh-daily-advice-item">${priorityIcon(a.priority)} ${escHtml(a.action ?? '')}${related}</div>`;
-      })
-      .join('');
+    currentDailyAdvice = { recordId: record.$id.value, parsed: { ...parsed, actions } };
+    renderDailyAdvice(bodyEl);
   } catch (err) {
     bodyEl.textContent = '読み込みに失敗しました: ' + formatApiError(err);
+  }
+}
+
+function renderDailyAdvice(bodyEl: HTMLElement): void {
+  if (!currentDailyAdvice) return;
+  const priorityIcon = (priority?: string) =>
+    priority === 'high' ? '🔴' : priority === 'medium' ? '🟡' : '🟢';
+  bodyEl.innerHTML = currentDailyAdvice.parsed.actions
+    .map((a, idx) => {
+      const related = a.relatedRecord
+        ? ` <span class="exh-daily-advice-related">(${escHtml(a.relatedRecord)})</span>`
+        : '';
+      const doneClass = a.executed ? ' exh-daily-advice-done' : '';
+      return `<div class="exh-daily-advice-item${doneClass}"><label>
+        <input type="checkbox" class="exh-daily-advice-checkbox" data-idx="${idx}" ${a.executed ? 'checked' : ''}>
+        ${priorityIcon(a.priority)} ${escHtml(a.action ?? '')}${related}
+      </label></div>`;
+    })
+    .join('');
+}
+
+async function toggleActionExecuted(idx: number): Promise<void> {
+  if (!currentDailyAdvice) return;
+  const action = currentDailyAdvice.parsed.actions[idx];
+  if (!action) return;
+  const bodyEl = document.getElementById('exh-daily-advice-body');
+
+  action.executed = !action.executed;
+  if (bodyEl) renderDailyAdvice(bodyEl);
+
+  try {
+    await kintone.api('/k/v1/record', 'PUT', {
+      app: Number(CONFIG.dailyAdviceAppId),
+      id: Number(currentDailyAdvice.recordId),
+      record: { advice_json: { value: JSON.stringify(currentDailyAdvice.parsed) } },
+    });
+  } catch (err) {
+    action.executed = !action.executed;
+    if (bodyEl) {
+      renderDailyAdvice(bodyEl);
+      const errEl = document.createElement('div');
+      errEl.className = 'exh-daily-advice-error';
+      errEl.textContent = '更新に失敗しました: ' + formatApiError(err);
+      bodyEl.prepend(errEl);
+      setTimeout(() => errEl.remove(), 4000);
+    }
   }
 }
 
@@ -702,9 +769,17 @@ kintone.events.on(EVENTS, (event) => {
   if (appId === CONFIG.opportunityAppId && event.type === 'app.record.detail.show') {
     injectClosingAdviceButton();
     initRoleplay(appId);
+    initMeetingLog(appId);
+    initProposal(appId);
   }
-  if (event.type === 'portal.show' || event.type === 'mobile.portal.show') {
-    injectDailyAdviceCard();
+  if (event.type === 'app.record.index.show') {
+    initSalesScoring(appId);
+  }
+  if (event.type === 'space.portal.show' || event.type === 'mobile.space.portal.show') {
+    const spaceId = String((event as { spaceId?: unknown }).spaceId ?? '');
+    if (spaceId === DAILY_ADVICE_SPACE_ID) {
+      injectDailyAdviceCard();
+    }
   }
 
   return event;

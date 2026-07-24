@@ -19,6 +19,13 @@ AI活用型顧客管理システム(kintone版)。既存のSalesforce版アセ�
   案件詳細画面の🎭ロールプレイボタン+モーダルUI(顧客ペルソナ生成→会話→フィードバック、
   会話履歴はフロント側で保持し毎ターン全履歴をn8nへ送信するステートレス設計)、
   Whisper音声認識+OpenAI TTS音声合成(1.3倍速再生)によるハンズフリー会話
+- **Phase 6 — 営業担当者評価・提案資料自動作成**: exhibition_商談ログ/exhibition_担当者/
+  exhibition_営業評価アプリ、案件詳細画面の🎙️商談録音分析ボタン(Whisper文字起こし+
+  GPT-4o要約/センチメント分析)、デイリーアドバイスの完了チェックボックス機能、
+  担当者一覧画面の🏆全員スコアリング実行ボタン(実行率はロジックで決定的に算出、
+  行動/成果スコアはGPT-4oで算出)、案件詳細画面の📊提案資料生成ボタン
+  (GPT-4oが案件内容に応じてPPTXプレースホルダーを動的生成→Box.comへアップロード→
+  URLを案件へ書き戻し)
 
 ## セットアップ手順
 
@@ -34,6 +41,9 @@ cp .env.example .env
 - `N8N_INSTANCE_URL` / `N8N_API_KEY`
 - `OPENAI_API_KEY`(Phase 2の秘書AIエージェントで使用)
 - `PINECONE_API_KEY` / `PINECONE_INDEX_NAME` / `PINECONE_HOST`(Phase 4のRAG基盤で使用)
+- `BOX_CLIENT_ID` / `BOX_CLIENT_SECRET` / `BOX_ENTERPRISE_ID` / `BOX_FOLDER_ID`
+  (Phase 6の提案資料自動作成で使用。既存のBoxアプリを他プロジェクトと共用している場合、
+  `BOX_FOLDER_ID`だけこのプロジェクト専用のフォルダIDにしてください)
 
 ### 2. 依存関係をインストール
 
@@ -47,23 +57,26 @@ npm install
 npm run setup:apps
 ```
 
-以下の6アプリが作成されます(この順序で作成する必要があります。
+以下の9アプリが作成されます(この順序で作成する必要があります。
 `exhibition_案件` の `account` フィールドは `exhibition_取引先` の
 `company_name`(一意設定済み)を参照するLOOKUPフィールドのため、
 `exhibition_取引先` が先にデプロイ済みである必要があります。既存の`exhibition_案件`に
-`closing_advice`/`customer_issue`/`meeting_notes`フィールドが無ければ追加する
-マイグレーションも自動実行されます):
+`closing_advice`/`customer_issue`/`meeting_notes`/`proposal_url`/`proposal_status`/
+`proposal_generated_at`フィールドが無ければ追加するマイグレーションも自動実行されます):
 
 | アプリ名 | 用途 |
 |---|---|
 | exhibition_取引先 | 会社情報マスタ |
 | exhibition_リード | 名刺・問い合わせ由来の見込み客 |
-| exhibition_案件 | 商談・案件管理(取引先へのLOOKUP付き、closing_advice/customer_issue/meeting_notesフィールドあり) |
+| exhibition_案件 | 商談・案件管理(取引先へのLOOKUP付き、提案書URL等のフィールドあり) |
 | exhibition_秘書AI会話ログ | 秘書AIエージェントの対話履歴(監査・履歴用、UIはポーリングしない) |
 | exhibition_デイリーアドバイス | 日次生成される担当者別アドバイス(advice_date+assignee_codeで1日1件) |
 | exhibition_ロールプレイセッション | ロールプレイ練習の結果(ペルソナ・会話ログ・スコア・フィードバック) |
+| exhibition_商談ログ | 商談録音の文字起こし・要約・センチメント分析結果 |
+| exhibition_担当者 | 営業評価のスコアリング対象となる担当者マスタ(手動でレコード登録) |
+| exhibition_営業評価 | 担当者ごとの実行率・行動スコア・成果スコア・AIコメント |
 
-実行後、6アプリのApp IDが `app-ids.json` と `.env` の `KINTONE_APP_ID_*` に
+実行後、9アプリのApp IDが `app-ids.json` と `.env` の `KINTONE_APP_ID_*` に
 自動で書き込まれます。
 
 ### 4. 各アプリのAPIトークンを発行(手動)
@@ -71,7 +84,10 @@ npm run setup:apps
 kintone REST APIにはAPIトークンを発行するエンドポイントがないため、
 この手順は手動で行う必要があります。
 
-kintone管理画面 → 各アプリの設定 → APIトークン → 追加(6アプリすべてで実行)
+kintone管理画面 → 各アプリの設定 → APIトークン → 追加(9アプリすべてで実行)
+
+`exhibition_担当者`には、スコアリング対象にしたい担当者(担当者コード・担当者名)を
+手動でレコード登録してください(専用の登録フォームはありません)。
 
 必要な権限: `レコードの閲覧` `レコードの追加` `レコードの編集`
 
@@ -235,7 +251,63 @@ npm run setup:audio
 npm run deploy:customize
 ```
 
-### 16. 動作確認
+### 16. 商談ログ・営業評価・提案資料生成のn8nワークフローをデプロイ
+
+```bash
+npm run setup:meeting-log
+npm run setup:sales-scoring
+npm run setup:proposal
+```
+
+- `[kintone] 商談ログ分析`: 案件詳細画面から録音ファイルをkintoneのファイルアップロードAPIへ
+  直接アップロード→exhibition_商談ログにstatus処理中でレコード作成→この
+  Webhookを呼び出す(軽量ペイロード。Webhookは即座に`{started:true}`を返し、
+  実際の処理はバックグラウンドで継続する設計)。ファイルは一度レコードに添付されると
+  アップロード時のfileKeyが失効するため、レコードを再取得して新しいfileKeyで
+  ダウンロードする(kintoneの既知の挙動)。Whisperで文字起こし→GPT-4oで要約/
+  ネクストアクション/センチメント/キーワード/トピックを抽出→レコード更新。
+- `[kintone] 営業評価`: `exhibition_担当者`(status=有効)を全件取得し、n8nの
+  アイテム単位実行で担当者ごとに並行処理(Salesforce版の「@futureコールアウト50件上限」
+  のような制約はなく、1回の実行で全員をスコアリングできる)。実行率は
+  デイリーアドバイスの`executed`フラグと経過日数から決定的に算出、行動/成果スコアと
+  コメントはGPT-4oで生成。`assignee_code`+`period_start`+`period_end`で
+  upsert。こちらもWebhookは即座に応答し、バックグラウンドで処理を継続する。
+- `[kintone] 提案資料生成`: 案件情報(顧客の課題・商談メモ・関連する商談ログ含む)をもとに、
+  GPT-4oがPPTXテンプレート(`templates/proposal_template.pptx`、9スライド)の
+  プレースホルダーを案件ごとに動的生成(見積り金額の内訳・スケジュール日程などの
+  機械的な値のみCode nodeで決定的に計算し、AIには課題・機能・KPIなど文章面のみ
+  生成させる)。`src/lib/pptx-template.ts`がテンプレートのZIPを解析し、
+  純JS ZIP/CRC32ロジックを含むn8n Code node用ソースをデプロイ時に自動生成する。
+  生成後Box.comへアップロードし、共有リンクを`exhibition_案件.proposal_url`へ書き戻す。
+
+### 17. チャットUIをビルド・デプロイ(再実行)
+
+```bash
+npm run deploy:customize
+```
+
+`exhibition_取引先`/`exhibition_案件`/`exhibition_リード`/`exhibition_担当者`の
+4アプリに反映されます。
+
+### 18. デイリーアドバイスカードをスペースに表示する(手動設定)
+
+kintoneの「ポータル」「スペース」向けJavaScriptカスタマイズには**個別アプリ向けとは別の
+専用REST APIが存在せず、手動設定のみ**です(kintone管理画面 → kintoneシステム管理 →
+「JavaScript / CSSでカスタマイズ」→「kintone全体のカスタマイズ」— この1つの設定が
+ポータル・スペース双方に適用されます)。
+
+1. `dist/customize/chat.js`(手順17でビルド済み)をデスクトップ用・モバイル用の
+   JavaScriptファイルとして追加(既存の他のカスタマイズJSがあれば、削除せずそのまま
+   追加してください。複数ファイルが共存できます)
+2. 保存
+
+`chat.ts`内の`space.portal.show`/`mobile.space.portal.show`イベントハンドラは、
+`DAILY_ADVICE_SPACE_ID`定数(現在`'2'`)に一致するスペースでのみ「📌 本日のアドバイス」
+カードを表示します(kintoneには「このスペースだけにJSを適用する」機能が無いため、
+JS側でスペースIDを判定する疑似的な限定表示)。別のスペースに変更したい場合は
+`src/customize/chat.ts`の`DAILY_ADVICE_SPACE_ID`を書き換えて再デプロイしてください。
+
+### 19. 動作確認
 
 kintoneの取引先・案件・リードいずれかの画面を開くと右下に💬ボタンが表示されます。
 
@@ -253,13 +325,23 @@ kintoneの取引先・案件・リードいずれかの画面を開くと右下�
   (`npm run sync:bulk`実行後は既存レコードも検索対象になる)
 - 案件詳細画面の「🔍 クロージングアドバイスを生成」ボタン → 受注確度・類似案件を踏まえた
   分析がパネルに表示され、`closing_advice`フィールドにも保存される
-- kintoneポータル画面 → 右上に「📌 本日のアドバイス」カードが表示される(デイリーアドバイス
-  Cronが実行済みで、ログインユーザーの`assignee_code`に一致するレコードがある場合)
+- 対象スペース(手順18の`DAILY_ADVICE_SPACE_ID`)を開く → 「📌 本日のアドバイス」カードが
+  表示される(デイリーアドバイスCronが実行済みで、ログインユーザーの`assignee_code`に
+  一致するレコードがある場合)。各アクションのチェックボックスをクリック → 取り消し線表示に
+  なり`advice_json`の`executed`が更新される
 - チャットで「今日やることを教えて」と質問 → デイリーアドバイスの内容が回答に反映される
 - 案件詳細画面の「🎭 AIロールプレイ開始」ボタン → モーダルが開き、顧客ペルソナと冒頭発言が
   表示される → テキスト or 🎤音声入力で数ターン会話 → 🔊ONでAIの発言が1.3倍速で音声再生される
   → 「終了してフィードバックをもらう」でスコア・良かった点/改善点が表示され、
   exhibition_ロールプレイセッションにレコードが作成される
+- 案件詳細画面の「🎙️ 商談録音を分析」ボタン → 音声ファイルをアップロード → 文字起こし・
+  要約・ネクストアクション・センチメント・キーワードが表示され、exhibition_商談ログに
+  レコードが作成される
+- exhibition_担当者アプリの一覧画面の「🏆 全員スコアリング実行」ボタン → 期間を指定して
+  実行 → exhibition_営業評価に担当者ごとのランク・スコア・AIコメントが作成される
+- 案件詳細画面の「📊 提案資料を生成」ボタン → 案件情報(顧客の課題・商談メモ含む)に
+  即した内容でPPTXが生成され、「Boxで開く」リンクが表示される。
+  `exhibition_案件.proposal_url`にも同じURLが書き込まれる
 
 ## その他のコマンド
 
@@ -278,9 +360,10 @@ exhibition-asset/
 │   ├── lib/
 │   │   ├── kintone-client.ts   # kintone REST APIラッパー(@kintone/rest-api-client)
 │   │   ├── n8n-client.ts       # n8n REST APIクライアント
-│   │   └── record-to-text.ts   # kintoneレコード→embedding用テキスト変換(唯一の実装、
-│   │                           #   n8n Code nodeにはrecordToTextEmbeddable()で安全に埋め込む)
-│   ├── apps/schema.ts          # 6アプリのフィールド定義(ドロップダウン選択肢もここが正)
+│   │   ├── record-to-text.ts   # kintoneレコード→embedding用テキスト変換(唯一の実装、
+│   │   │                       #   n8n Code nodeにはrecordToTextEmbeddable()で安全に埋め込む)
+│   │   └── pptx-template.ts    # .pptxテンプレートのZIP解析→n8n Code node用ソース生成
+│   ├── apps/schema.ts          # 9アプリのフィールド定義(ドロップダウン選択肢もここが正)
 │   ├── workflows/
 │   │   ├── agent-workflow.ts             # 秘書AIエージェント(デイリーアドバイス検索含む)
 │   │   ├── meishi-workflow.ts             # 名刺解析(GPT-4o Vision+重複チェック)
@@ -290,10 +373,16 @@ exhibition-asset/
 │   │   ├── closing-advice-workflow.ts     # クロージングアドバイス(Pinecone類似検索+GPT-4o)
 │   │   ├── daily-advice-workflow.ts       # デイリーアドバイス日次生成Cron
 │   │   ├── roleplay-workflow.ts           # ロールプレイ 開始/会話/フィードバック(3 Webhook)
-│   │   └── audio-workflow.ts              # 音声認識(Whisper)/音声合成(TTS)(2 Webhook)
+│   │   ├── audio-workflow.ts              # 音声認識(Whisper)/音声合成(TTS)(2 Webhook)
+│   │   ├── meeting-log-workflow.ts        # 商談ログ分析(Whisper+GPT-4o、非同期応答)
+│   │   ├── sales-scoring-workflow.ts      # 営業評価(実行率は決定的算出+GPT-4oスコア)
+│   │   └── proposal-workflow.ts           # 提案資料生成(GPT-4o+PPTX構築+Boxアップロード)
 │   ├── customize/
 │   │   ├── chat.ts             # kintoneチャットUI(ブラウザ側、Viteでビルド)
 │   │   ├── roleplay.ts         # ロールプレイのモーダルUI・音声入出力(chat.tsからimport)
+│   │   ├── meeting-log.ts      # 商談録音アップロード・分析結果表示(chat.tsからimport)
+│   │   ├── sales-scoring.ts    # 全員スコアリング実行ボタン(chat.tsからimport)
+│   │   ├── proposal.ts         # 提案資料生成ボタン(chat.tsからimport)
 │   │   └── image-utils.ts      # 画像リサイズの純粋関数(vitestで単体テスト)
 │   └── scripts/
 │       ├── setup-kintone-apps.ts
@@ -309,9 +398,13 @@ exhibition-asset/
 │       ├── deploy-daily-advice-workflow.ts
 │       ├── deploy-roleplay-workflow.ts
 │       ├── deploy-audio-workflow.ts
+│       ├── deploy-meeting-log-workflow.ts
+│       ├── deploy-sales-scoring-workflow.ts
+│       ├── deploy-proposal-workflow.ts
 │       ├── bulk-sync-pinecone.ts          # 既存レコードのPinecone一括バックフィル
 │       ├── generate-test-contact-form.ts
 │       └── deploy-customize.ts
+├── templates/proposal_template.pptx  # 提案資料の元テンプレート(9スライド、{{TOKEN}}形式)
 ├── vite.config.ts               # chat.tsのビルド設定(webhook URL等をビルド時に注入)
 ├── app-ids.json                 # 生成物(gitignore対象)
 ├── dist/customize/               # 生成物(gitignore対象)

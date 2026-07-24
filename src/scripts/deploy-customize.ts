@@ -27,6 +27,7 @@ async function main() {
     { label: 'exhibition_取引先', appId: requireAppId(env, 'kintoneAppIdAccount') },
     { label: 'exhibition_案件', appId: requireAppId(env, 'kintoneAppIdOpportunity') },
     { label: 'exhibition_リード', appId: requireAppId(env, 'kintoneAppIdLead') },
+    { label: 'exhibition_担当者', appId: requireAppId(env, 'kintoneAppIdAssignee') },
   ];
 
   // A fileKey is consumed on first use — reusing the same fileKey across apps, or even twice
@@ -51,7 +52,7 @@ async function main() {
     await kintone.waitForDeploy(target.appId);
   }
 
-  console.log('Done. chat.js is now attached to 取引先/案件/リード.');
+  console.log('Done. chat.js is now attached to 取引先/案件/リード/担当者.');
 }
 
 main().catch((err) => {

@@ -91,18 +91,19 @@ return Object.entries(groups).map(([owner, ownerDeals]) => ({ json: { owner, dea
 const owner = $json.owner;
 const deals = $json.deals;
 const dealsText = deals.map((d) => {
+  const id = (d.$id && d.$id.value) || '';
   const name = (d.deal_name && d.deal_name.value) || '';
   const stage = (d.stage && d.stage.value) || '';
   const amount = (d.amount && d.amount.value) || '';
   const closeDate = (d.close_date && d.close_date.value) || '';
-  return "- " + name + " (フェーズ:" + stage + ", 金額:" + amount + "円, クロージング予定:" + closeDate + ")";
+  return "- [ID:" + id + "] " + name + " (フェーズ:" + stage + ", 金額:" + amount + "円, クロージング予定:" + closeDate + ")";
 }).join('\\n');
 
 const prompt = "あなたは営業マネージャーのアシスタントです。担当者「" + owner + "」が現在担当している" +
   "以下の案件一覧から、本日優先して取り組むべきアクションを3〜7個、優先度付きで提案してください。\\n\\n" +
   "案件一覧:\\n" + dealsText + "\\n\\n" +
   "必ず次のJSON形式のみで回答してください(説明文は不要):\\n" +
-  '{"context_summary": "50字以内の要約", "actions": [{"priority": "high|medium|low", "action": "...", "reason": "...", "relatedRecord": "案件名"}]}';
+  '{"context_summary": "50字以内の要約", "actions": [{"priority": "high|medium|low", "action": "...", "reason": "...", "relatedRecord": "案件名", "relatedRecordId": "案件一覧の[ID:xxx]の値(該当なければ空文字)", "executed": false}]}';
 
 return [{ json: { owner, prompt } }];
 `.trim(),
