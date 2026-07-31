@@ -6,10 +6,15 @@ import {
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
 import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
+import { initLeadInsights } from './lead-insights';
 import { initMeetingLog } from './meeting-log';
+import { initPipelineDashboard } from './pipeline-dashboard';
 import { initProposal } from './proposal';
+import { initRecordSummary } from './record-summary';
 import { initRoleplay } from './roleplay';
 import { initSalesScoring } from './sales-scoring';
+import { getOrCreateSpaceWidgetRow, initSpaceDashboard } from './space-dashboard';
+import { THEME } from './theme';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -32,7 +37,8 @@ type AgentAction =
   | 'show_form_account'
   | 'show_form_edit_account'
   | 'show_form_opportunity'
-  | 'show_form_edit_opportunity';
+  | 'show_form_edit_opportunity'
+  | 'generate_proposal';
 
 interface AgentResponse {
   answer?: string;
@@ -59,10 +65,24 @@ const CONFIG = {
   accountAppId: __ACCOUNT_APP_ID__,
   opportunityAppId: __OPPORTUNITY_APP_ID__,
   leadAppId: __LEAD_APP_ID__,
+  assigneeAppId: __ASSIGNEE_APP_ID__,
   meishiWebhookUrl: __MEISHI_WEBHOOK_URL__,
   closingAdviceWebhookUrl: __CLOSING_ADVICE_WEBHOOK_URL__,
   dailyAdviceAppId: __DAILY_ADVICE_APP_ID__,
+  proposalWebhookUrl: __PROPOSAL_WEBHOOK_URL__,
 };
+
+// chat.js is loaded both per-app (on our 4 exhibition_* apps) AND org-wide via
+// 「kintone全体のカスタマイズ」(the only way to react to space.portal.show at all — see
+// README's Phase 6 setup notes). Because org-wide customize fires app.record.* events for
+// *every* app in the whole kintone environment, not just ours, the chat widget must check this
+// allowlist before rendering — otherwise it leaks onto every other Novagrid app in the org.
+const EXHIBITION_APP_IDS = new Set([
+  CONFIG.accountAppId,
+  CONFIG.opportunityAppId,
+  CONFIG.leadAppId,
+  CONFIG.assigneeAppId,
+]);
 
 interface ClosingAdvice {
   closingProbability?: number;
@@ -96,10 +116,26 @@ function genId(): string {
   return 'exh' + Math.random().toString(36).slice(2, 10);
 }
 
+// Maps the AI's Japanese appName label (see MAIN_SYSTEM_PROMPT's referencedRecords spec in
+// agent-workflow.ts) to the actual kintone app ID, so a referenced record can link straight to
+// its detail page instead of just showing as inert text.
+const RECORD_APP_IDS: Record<string, string> = {
+  取引先: CONFIG.accountAppId,
+  案件: CONFIG.opportunityAppId,
+  リード: CONFIG.leadAppId,
+};
+
+function buildRecordUrl(appName: string, recordId: string): string | null {
+  const appId = RECORD_APP_IDS[appName];
+  if (!appId) return null;
+  return `/k/${appId}/show#record=${encodeURIComponent(recordId)}`;
+}
+
 // kintone's space-wide JS/CSS customization slot is global (there is no per-space attachment
-// point), so the daily-advice-card feature scopes itself to one space by checking event.spaceId
-// at runtime instead — chosen by the user to avoid the widget appearing on every space in the org.
-const DAILY_ADVICE_SPACE_ID = '2';
+// point), so space-facing features (the exhibition-booth chat widget, the daily-advice card)
+// scope themselves to one space by checking event.spaceId at runtime instead — chosen by the
+// user to avoid showing up on every space in the org.
+const EXHIBITION_SPACE_ID = '2';
 
 const SESSION_ID = genId();
 const conversationHistory: ChatMessage[] = [];
@@ -134,58 +170,114 @@ function injectStyles(): void {
   if (document.getElementById('exh-styles')) return;
   const style = document.createElement('style');
   style.id = 'exh-styles';
+  const t = THEME;
   style.textContent = `
-#exh-fab { position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%;
-  background: #2f6fed; color: #fff; font-size: 24px; display: flex; align-items: center;
-  justify-content: center; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); z-index: 9999; border: none; }
-#exh-panel { position: fixed; bottom: 90px; right: 24px; width: 360px; max-height: 70vh;
-  background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,.2); display: flex;
-  flex-direction: column; z-index: 9999; overflow: hidden; }
+#exh-fab { position: fixed; bottom: 24px; right: 24px; width: 64px; height: 64px; border-radius: 50%;
+  background: linear-gradient(145deg, ${t.sora}, ${t.soraDeep}); color: #fff; font-size: 26px; display: flex;
+  align-items: center; justify-content: center; cursor: pointer;
+  box-shadow: 0 16px 32px -12px rgba(0,152,187,.55), 0 0 0 6px rgba(0,152,187,.16);
+  z-index: 9999; border: none; animation: exh-pulse 2.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { #exh-fab { animation: none; } }
+@keyframes exh-pulse {
+  0%, 100% { box-shadow: 0 16px 32px -12px rgba(0,152,187,.55), 0 0 0 6px rgba(0,152,187,.16); }
+  50% { box-shadow: 0 16px 32px -12px rgba(0,152,187,.7), 0 0 0 12px rgba(0,152,187,.08); }
+}
+#exh-panel { position: fixed; bottom: 100px; right: 24px; width: 400px; max-height: 72vh;
+  background: ${t.cloud}; border-radius: 18px; box-shadow: 0 24px 60px -24px rgba(20,40,60,.35);
+  display: flex; flex-direction: column; z-index: 9999; overflow: hidden; border: 1px solid ${t.mistLine}; }
 #exh-panel.exh-hidden { display: none; }
-#exh-header { background: #2f6fed; color: #fff; padding: 12px 16px; display: flex;
-  justify-content: space-between; align-items: center; }
-#exh-close { cursor: pointer; background: none; border: none; color: #fff; font-size: 18px; }
-#exh-msgs { flex: 1; overflow-y: auto; padding: 12px; background: #f5f6f8; }
-#exh-chips { display: flex; gap: 6px; padding: 8px 10px 0; flex-wrap: wrap; }
-.exh-chip { background: #eef2ff; color: #2f6fed; border: none; border-radius: 999px;
-  padding: 6px 12px; font-size: 12px; cursor: pointer; }
-.exh-chip:hover { background: #dde6ff; }
-.exh-bubble { max-width: 85%; margin-bottom: 10px; padding: 8px 12px; border-radius: 10px;
-  font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
-.exh-bubble.exh-user { background: #2f6fed; color: #fff; margin-left: auto; }
-.exh-bubble.exh-ai { background: #fff; color: #222; border: 1px solid #e0e0e0; }
-.exh-pill { display: inline-block; margin: 4px 4px 0 0; padding: 2px 8px; border-radius: 999px;
-  background: #eef2ff; color: #2f6fed; font-size: 11px; text-decoration: none; }
-#exh-footer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #e0e0e0; align-items: flex-end; }
-#exh-image-btn { background: none; border: none; font-size: 20px; cursor: pointer; padding: 0 2px; }
-#exh-input { flex: 1; resize: none; border: 1px solid #ccc; border-radius: 8px; padding: 8px;
-  font-size: 13px; max-height: 80px; }
-#exh-send { background: #2f6fed; color: #fff; border: none; border-radius: 8px; padding: 0 14px;
-  cursor: pointer; }
-.exh-form { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 10px;
-  margin-top: 6px; font-size: 12px; }
-.exh-form label { display: block; margin-top: 6px; color: #555; }
+#exh-header { background: linear-gradient(120deg, ${t.sora} 0%, ${t.soraDeep} 70%, #005872 130%);
+  color: #fff; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; }
+.exh-header-who { display: flex; align-items: center; gap: 10px; }
+.exh-avatar { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,.22);
+  display: flex; align-items: center; justify-content: center; font-size: 16px; flex: 0 0 auto; }
+.exh-header-name { font-weight: 800; font-size: 14px; }
+.exh-header-status { font-size: 11px; opacity: .85; display: flex; align-items: center; gap: 5px; margin-top: 1px; }
+.exh-header-status .exh-led { width: 6px; height: 6px; border-radius: 50%; background: ${t.sun};
+  box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+#exh-close { cursor: pointer; background: rgba(255,255,255,.18); border: none; color: #fff; font-size: 13px;
+  width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; }
+#exh-msgs { flex: 1; overflow-y: auto; padding: 14px; background: ${t.cloud}; display: flex;
+  flex-direction: column; gap: 10px; }
+#exh-chips { display: flex; gap: 8px; padding: 8px 12px 0; flex-wrap: wrap; }
+.exh-chip { display: flex; align-items: center; gap: 4px; background: rgba(255,122,69,.14); color: #c85a2e;
+  border: 1px solid rgba(255,122,69,.32); border-radius: 999px; padding: 7px 13px; font-size: 12.5px;
+  font-weight: 700; cursor: pointer; }
+.exh-chip:hover { background: rgba(255,122,69,.24); }
+.exh-bubble { max-width: 85%; padding: 10px 13px; border-radius: 14px;
+  font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.exh-bubble.exh-user { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff;
+  margin-left: auto; border-bottom-right-radius: 4px; }
+.exh-bubble.exh-ai { background: #fff; color: ${t.ink}; border: 1px solid ${t.mistLine};
+  border-bottom-left-radius: 4px; }
+.exh-pill { display: inline-block; margin: 4px 4px 0 0; padding: 2px 9px; border-radius: 999px;
+  background: rgba(0,152,187,.14); color: ${t.soraDeep}; font-size: 11px; text-decoration: none; font-weight: 600; }
+a.exh-pill { cursor: pointer; }
+a.exh-pill:hover { background: rgba(0,152,187,.26); text-decoration: underline; }
+.exh-fb-row { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+.exh-fb-btn { background: none; border: 1px solid ${t.mistLine}; border-radius: 8px; font-size: 13px;
+  padding: 3px 8px; cursor: pointer; line-height: 1; }
+.exh-fb-btn:hover { background: ${t.mist}; }
+.exh-fb-btn.exh-fb-active { background: ${t.sora}; border-color: ${t.sora}; opacity: .85; pointer-events: none; }
+.exh-fb-note { font-size: 11.5px; color: #7a8a94; }
+.exh-fb-correction { margin-top: 6px; }
+.exh-fb-correction textarea { width: 100%; box-sizing: border-box; border: 1px solid ${t.mistLine};
+  border-radius: 8px; padding: 6px 8px; font-size: 12px; font-family: inherit; resize: vertical;
+  min-height: 44px; background: ${t.cloud}; color: ${t.ink}; }
+.exh-fb-correction-submit { margin-top: 4px; border: none; border-radius: 8px; padding: 5px 12px;
+  font-size: 12px; font-weight: 700; color: #fff; cursor: pointer;
+  background: linear-gradient(120deg, ${t.hinode}, #e8632e); }
+#exh-footer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid ${t.mistLine}; align-items: flex-end;
+  background: #fff; }
+#exh-image-btn { background: rgba(255,201,60,.24); border: none; font-size: 18px; cursor: pointer; padding: 0;
+  width: 36px; height: 36px; border-radius: 10px; flex: 0 0 auto; }
+#exh-input { flex: 1; resize: none; border: 1px solid ${t.mistLine}; border-radius: 10px; padding: 9px 11px;
+  font-size: 13px; max-height: 80px; font-family: inherit; background: ${t.cloud}; color: ${t.ink}; }
+#exh-input:focus { outline: 2px solid ${t.sora}; outline-offset: 1px; }
+#exh-send { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff; border: none;
+  border-radius: 10px; padding: 0 18px; height: 36px; font-weight: 700; cursor: pointer; }
+.exh-form { background: #fff; border: 1px solid ${t.mistLine}; border-radius: 12px; padding: 12px;
+  margin-top: 4px; font-size: 12.5px; }
+.exh-form > div:first-child { font-weight: 800; font-size: 13px; margin-bottom: 4px; }
+.exh-form label { display: block; margin-top: 8px; color: #5a6b7a; font-size: 12px; }
 .exh-form input, .exh-form textarea, .exh-form select { width: 100%; box-sizing: border-box;
-  padding: 6px; border: 1px solid #ccc; border-radius: 6px; font-size: 12px; margin-top: 2px; }
-.exh-form-submit { margin-top: 8px; width: 100%; background: #2f6fed; color: #fff; border: none;
-  border-radius: 6px; padding: 8px; cursor: pointer; }
-.exh-closing-advice-btn { background: #2f6fed; color: #fff; border: none; border-radius: 6px;
-  padding: 6px 12px; font-size: 13px; cursor: pointer; margin-left: 8px; }
-.exh-closing-advice-panel { margin-top: 10px; padding: 12px; border: 1px solid #e0e0e0;
-  border-radius: 8px; background: #fafbff; font-size: 13px; max-width: 480px; }
+  padding: 7px 9px; border: 1px solid ${t.mistLine}; border-radius: 8px; font-size: 12.5px; margin-top: 3px;
+  font-family: inherit; background: ${t.cloud}; color: ${t.ink}; }
+.exh-form input:focus, .exh-form textarea:focus, .exh-form select:focus { outline: 2px solid ${t.sora};
+  outline-offset: 1px; }
+.exh-form-submit { margin-top: 10px; width: 100%; border: none; border-radius: 10px; padding: 9px;
+  font-weight: 800; font-size: 12.5px; color: #fff; cursor: pointer;
+  background: linear-gradient(120deg, ${t.hinode}, #e8632e); }
+.exh-closing-advice-btn { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff; border: none;
+  border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; margin: 0 8px 8px 0;
+  box-shadow: 0 6px 14px -6px rgba(0,152,187,.55); transition: transform .15s ease, box-shadow .15s ease; }
+.exh-closing-advice-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -8px rgba(0,152,187,.6); }
+.exh-closing-advice-panel { margin-top: 10px; padding: 14px; border: 1px solid ${t.mistLine};
+  border-radius: 12px; background: #fff; font-size: 13px; max-width: 480px; }
 .exh-closing-advice-panel.exh-hidden { display: none; }
-.exh-advice-title { font-size: 15px; font-weight: bold; margin-bottom: 6px; color: #2f6fed; }
+.exh-advice-title { font-size: 15px; font-weight: 800; margin-bottom: 6px; color: ${t.soraDeep}; }
 .exh-advice-section { margin-top: 8px; }
 .exh-advice-section ul { margin: 4px 0 0; padding-left: 18px; }
-#exh-daily-advice-card { position: fixed; top: 16px; right: 16px; width: 300px; max-height: 60vh;
-  overflow-y: auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,.15);
-  padding: 12px; z-index: 9998; font-size: 13px; }
-.exh-daily-advice-title { font-weight: bold; margin-bottom: 8px; color: #2f6fed; }
-.exh-daily-advice-item { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+/* Sits in the normal page flow (inside the shared widget row next to the dashboard card) rather
+   than floating fixed to the viewport, so it scrolls away with the page instead of staying
+   pinned on screen — same reasoning as space-dashboard.ts's card. */
+#exh-daily-advice-card { width: 300px; max-height: 60vh; flex: 0 0 auto;
+  overflow-y: auto; background: #fff; border-radius: 14px; box-shadow: 0 12px 32px -16px rgba(20,40,60,.35);
+  border: 1px solid ${t.mistLine}; padding: 14px; font-size: 13px; }
+.exh-daily-advice-title { font-weight: 800; margin-bottom: 8px; color: ${t.soraDeep}; }
+.exh-daily-advice-item { padding: 6px 0; border-bottom: 1px solid ${t.mist}; }
 .exh-daily-advice-item label { cursor: pointer; display: flex; align-items: flex-start; gap: 6px; }
-.exh-daily-advice-item.exh-daily-advice-done { color: #999; text-decoration: line-through; }
-.exh-daily-advice-related { color: #888; font-size: 11px; }
+.exh-daily-advice-item.exh-daily-advice-done { color: #93a3ac; text-decoration: line-through; }
+.exh-daily-advice-related { color: #7a8a94; font-size: 11px; }
 .exh-daily-advice-error { color: #d33; font-size: 11px; padding-bottom: 6px; }
+.exh-status-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
+  border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.exh-status-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.exh-pill-neutral { background: ${t.mist}; color: #5a6b7a; }
+.exh-pill-progress { background: rgba(255,122,69,.16); color: #c85a2e; }
+.exh-pill-positive { background: rgba(46,168,107,.16); color: #1c7a4c; }
+.exh-pill-negative { background: rgba(211,51,51,.12); color: #b23a3a; }
 `;
   document.head.appendChild(style);
 }
@@ -203,7 +295,13 @@ function buildUI(): void {
   panel.className = 'exh-hidden';
   panel.innerHTML = `
     <div id="exh-header">
-      <span>営業AI秘書</span>
+      <div class="exh-header-who">
+        <div class="exh-avatar">🤖</div>
+        <div>
+          <div class="exh-header-name">営業AI秘書</div>
+          <div class="exh-header-status"><span class="exh-led"></span>展示会サポート中</div>
+        </div>
+      </div>
       <button id="exh-close">✕</button>
     </div>
     <div id="exh-msgs"></div>
@@ -284,7 +382,67 @@ function pushLoadingBubble(text: string): HTMLElement {
   return el;
 }
 
-function pushAI(text: string, data?: AgentResponse): void {
+async function sendFeedback(payload: Record<string, unknown>): Promise<void> {
+  try {
+    await kintone.proxy(
+      CONFIG.webhookUrl,
+      'POST',
+      { 'Content-Type': 'application/json', 'x-webhook-secret': CONFIG.webhookSecret },
+      JSON.stringify({ message: '__feedback__', sessionId: SESSION_ID, feedback: payload }),
+    );
+  } catch {
+    // フィードバック送信の失敗はチャット自体の応答をブロックしない
+  }
+}
+
+function renderFeedbackRow(container: HTMLElement, question: string, answer: string): void {
+  const row = document.createElement('div');
+  row.className = 'exh-fb-row';
+  row.innerHTML = `
+    <button class="exh-fb-btn" data-fb="positive" title="役に立った">👍</button>
+    <button class="exh-fb-btn" data-fb="negative" title="訂正がある">👎</button>
+  `;
+  container.appendChild(row);
+
+  const positiveBtn = row.querySelector<HTMLButtonElement>('[data-fb="positive"]')!;
+  const negativeBtn = row.querySelector<HTMLButtonElement>('[data-fb="negative"]')!;
+
+  positiveBtn.addEventListener('click', () => {
+    positiveBtn.classList.add('exh-fb-active');
+    negativeBtn.disabled = true;
+    void sendFeedback({ type: 'positive', question, ai_answer: answer });
+  });
+
+  negativeBtn.addEventListener('click', () => {
+    if (container.querySelector('.exh-fb-correction')) return;
+    positiveBtn.disabled = true;
+    negativeBtn.classList.add('exh-fb-active');
+
+    const box = document.createElement('div');
+    box.className = 'exh-fb-correction';
+    box.innerHTML = `
+      <textarea placeholder="どう訂正すればよかったか教えてください"></textarea>
+      <button class="exh-fb-correction-submit">送信</button>
+    `;
+    container.appendChild(box);
+
+    const textarea = box.querySelector('textarea')!;
+    const submitBtn = box.querySelector<HTMLButtonElement>('.exh-fb-correction-submit')!;
+    submitBtn.addEventListener('click', () => {
+      const correction = textarea.value.trim();
+      if (!correction) return;
+      void sendFeedback({ type: 'negative', question, ai_answer: answer, user_correction: correction });
+      box.innerHTML = '<span class="exh-fb-note">フィードバックありがとうございます</span>';
+    });
+  });
+}
+
+function updateAIBubble(id: string, text: string): void {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = md2html(text);
+}
+
+function pushAI(text: string, data?: AgentResponse, question?: string): string {
   const id = 'exh-msg-' + msgSeq++;
   const el = document.createElement('div');
   el.className = 'exh-bubble exh-ai';
@@ -293,9 +451,15 @@ function pushAI(text: string, data?: AgentResponse): void {
 
   if (data?.referencedRecords?.length) {
     for (const ref of data.referencedRecords) {
-      const pill = document.createElement('span');
+      const url = ref.recordId && ref.appName ? buildRecordUrl(ref.appName, ref.recordId) : null;
+      const pill = document.createElement(url ? 'a' : 'span');
       pill.className = 'exh-pill';
       pill.textContent = ref.label;
+      if (url) {
+        pill.setAttribute('href', url);
+        pill.setAttribute('target', '_blank');
+        pill.setAttribute('rel', 'noopener');
+      }
       el.appendChild(pill);
     }
     const first = data.referencedRecords[0];
@@ -307,6 +471,10 @@ function pushAI(text: string, data?: AgentResponse): void {
   getMsgsEl().appendChild(el);
   scrollToBottom();
 
+  if (question) {
+    renderFeedbackRow(el, question, text || '');
+  }
+
   if (data?.action) {
     const prefill = data.prefill || {};
     setTimeout(() => {
@@ -317,8 +485,34 @@ function pushAI(text: string, data?: AgentResponse): void {
         data.action === 'show_form_edit_opportunity'
       ) {
         pushOpportunityForm(prefill);
+      } else if (data.action === 'generate_proposal') {
+        const recordId = String(prefill._recordId || '');
+        if (recordId) void generateProposalFromChat(recordId);
       }
     }, 150);
+  }
+
+  return id;
+}
+
+async function generateProposalFromChat(recordId: string): Promise<void> {
+  const bubbleId = pushAI('📊 提案資料を生成中です... (30秒ほどかかります)');
+  try {
+    const resp = await kintone.proxy(
+      CONFIG.proposalWebhookUrl,
+      'POST',
+      { 'Content-Type': 'application/json', 'x-webhook-secret': CONFIG.webhookSecret },
+      JSON.stringify({ recordId }),
+    );
+    const raw = String(resp[0] ?? '').trim();
+    const result = JSON.parse(raw) as { success?: boolean; boxUrl?: string | null };
+    if (result.success && result.boxUrl) {
+      updateAIBubble(bubbleId, `提案資料を生成しました。\n\n[📄 Boxで開く](${result.boxUrl})`);
+    } else {
+      updateAIBubble(bubbleId, '提案資料の生成に失敗しました。');
+    }
+  } catch (err) {
+    updateAIBubble(bubbleId, '提案資料の生成に失敗しました: ' + formatApiError(err));
   }
 }
 
@@ -593,7 +787,7 @@ async function handleSend(text: string): Promise<void> {
 
     const answer = data.answer || '';
     conversationHistory.push({ role: 'assistant', content: answer });
-    pushAI(answer, data);
+    pushAI(answer, data, text);
   } catch (err) {
     pushAI('エラーが発生しました: ' + formatApiError(err));
   }
@@ -668,7 +862,7 @@ function injectDailyAdviceCard(): void {
   card.id = 'exh-daily-advice-card';
   card.innerHTML =
     '<div class="exh-daily-advice-title">📌 本日のアドバイス</div><div id="exh-daily-advice-body">読み込み中...</div>';
-  document.body.appendChild(card);
+  getOrCreateSpaceWidgetRow().appendChild(card);
 
   card.querySelector('#exh-daily-advice-body')!.addEventListener('change', (e) => {
     const target = e.target as HTMLElement;
@@ -761,25 +955,128 @@ async function toggleActionExecuted(idx: number): Promise<void> {
   }
 }
 
+// kintone has no way to color-code a DROP_DOWN's list-view cell by its value via settings, so
+// this walks the rendered list looking for known status text and wraps it in a colored pill.
+// `.value-<fieldCode>` is an undocumented kintone class name (not a public API) — if a future
+// kintone update renames it, this silently stops matching and the list just falls back to
+// plain text, so there's no functional risk in relying on it.
+export const STATUS_PILL_CLASS: Record<string, string> = {
+  成約: 'exh-pill-positive',
+  取引中: 'exh-pill-positive',
+  有効: 'exh-pill-positive',
+  変換済み: 'exh-pill-positive',
+  完了: 'exh-pill-positive',
+  提案中: 'exh-pill-progress',
+  見積提出: 'exh-pill-progress',
+  交渉中: 'exh-pill-progress',
+  対応中: 'exh-pill-progress',
+  生成中: 'exh-pill-progress',
+  処理中: 'exh-pill-progress',
+  失注: 'exh-pill-negative',
+  休眠: 'exh-pill-negative',
+  無効: 'exh-pill-negative',
+  対象外: 'exh-pill-negative',
+  エラー: 'exh-pill-negative',
+  初期接触: 'exh-pill-neutral',
+  ヒアリング: 'exh-pill-neutral',
+  見込み: 'exh-pill-neutral',
+  未対応: 'exh-pill-neutral',
+  未生成: 'exh-pill-neutral',
+};
+
+const PILL_FIELD_CODES = ['stage', 'status', 'proposal_status'];
+
+function colorizeStatusPills(): void {
+  for (const fieldCode of PILL_FIELD_CODES) {
+    const cells = document.querySelectorAll<HTMLElement>(`.value-${fieldCode}`);
+    cells.forEach((cell) => {
+      if (cell.querySelector('.exh-status-pill')) return;
+      const text = cell.textContent?.trim();
+      if (!text) return;
+      const cls = STATUS_PILL_CLASS[text] || 'exh-pill-neutral';
+      cell.innerHTML = '';
+      const pill = document.createElement('span');
+      pill.className = `exh-status-pill ${cls}`;
+      pill.textContent = text;
+      cell.appendChild(pill);
+    });
+  }
+}
+
+// The list view exposes ".value-<fieldCode>" (used above), but the detail view instead exposes
+// ".value-<numeric internal field id>" — a per-app, per-field number with no code mapping
+// available from customize JS. Matching by the field's visible Japanese label text sidesteps that
+// entirely (confirmed against the live DOM: label text lives in ".control-label-text-gaia",
+// sharing a ".control-gaia" ancestor with the value's ".control-value-gaia").
+const PILL_FIELD_LABELS = ['フェーズ', 'ステータス', '提案書ステータス'];
+
+function colorizeDetailStatusPills(): void {
+  const labels = document.querySelectorAll<HTMLElement>('#record-gaia .control-label-text-gaia');
+  labels.forEach((labelEl) => {
+    const labelText = labelEl.textContent?.trim();
+    if (!labelText || !PILL_FIELD_LABELS.includes(labelText)) return;
+    const wrapper = labelEl.closest('.control-gaia');
+    const valueEl = wrapper?.querySelector<HTMLElement>('.control-value-gaia');
+    if (!valueEl || valueEl.querySelector('.exh-status-pill')) return;
+    const text = valueEl.textContent?.trim();
+    if (!text) return;
+    const cls = STATUS_PILL_CLASS[text] || 'exh-pill-neutral';
+    valueEl.innerHTML = '';
+    const pill = document.createElement('span');
+    pill.className = `exh-status-pill ${cls}`;
+    pill.textContent = text;
+    valueEl.appendChild(pill);
+  });
+}
+
 kintone.events.on(EVENTS, (event) => {
+  // kintone's org-wide "kintone全体のカスタマイズ" JS slot (the only way to react to
+  // space.portal.show at all — see README's Phase 6 setup notes) loads this same chat.js on
+  // EVERY space's portal page across the whole kintone environment, not just this app's own
+  // space — hence the spaceId check. The exhibition-booth chat widget shows here too (for staff
+  // to use it directly from the space's landing page, without first opening an individual app),
+  // alongside the daily-advice card.
+  if (event.type === 'space.portal.show' || event.type === 'mobile.space.portal.show') {
+    const spaceId = String((event as { spaceId?: unknown }).spaceId ?? '');
+    if (spaceId === EXHIBITION_SPACE_ID) {
+      injectStyles();
+      buildUI();
+      // Order matters: getOrCreateSpaceWidgetRow() appends children in call order, and the
+      // dashboard is meant to render to the left of the daily-advice card.
+      initSpaceDashboard();
+      injectDailyAdviceCard();
+    }
+    return event;
+  }
+
+  const appId = String(kintone.app.getId() || '');
+  if (!EXHIBITION_APP_IDS.has(appId)) {
+    return event;
+  }
+
   injectStyles();
   buildUI();
 
-  const appId = String(kintone.app.getId() || '');
+  if (event.type === 'app.record.detail.show') {
+    colorizeStatusPills();
+    colorizeDetailStatusPills();
+  }
   if (appId === CONFIG.opportunityAppId && event.type === 'app.record.detail.show') {
-    injectClosingAdviceButton();
-    initRoleplay(appId);
-    initMeetingLog(appId);
-    initProposal(appId);
+    // Each wrapped independently: one throwing must not stop the rest from running (an earlier
+    // version had initRecordSummary silently never execute if something ahead of it threw).
+    for (const fn of [injectClosingAdviceButton, () => initRoleplay(appId), () => initMeetingLog(appId), () => initProposal(appId), () => initRecordSummary(appId, (event as { record?: unknown }).record)]) {
+      try {
+        fn();
+      } catch (err) {
+        console.error('[exh] detail.show init failed:', err);
+      }
+    }
   }
   if (event.type === 'app.record.index.show') {
     initSalesScoring(appId);
-  }
-  if (event.type === 'space.portal.show' || event.type === 'mobile.space.portal.show') {
-    const spaceId = String((event as { spaceId?: unknown }).spaceId ?? '');
-    if (spaceId === DAILY_ADVICE_SPACE_ID) {
-      injectDailyAdviceCard();
-    }
+    colorizeStatusPills();
+    initPipelineDashboard(appId);
+    initLeadInsights(appId);
   }
 
   return event;

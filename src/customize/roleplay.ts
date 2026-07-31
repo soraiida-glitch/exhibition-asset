@@ -1,4 +1,5 @@
 import { escHtml, formatApiError } from './chat';
+import { THEME } from './theme';
 
 interface RoleplayMessage {
   role: 'user' | 'assistant';
@@ -94,39 +95,49 @@ function injectRoleplayStyles(): void {
   if (document.getElementById('exh-rp-styles')) return;
   const style = document.createElement('style');
   style.id = 'exh-rp-styles';
+  const t = THEME;
   style.textContent = `
-.exh-rp-launch-btn { background: #a24fe0; color: #fff; border: none; border-radius: 6px;
-  padding: 6px 12px; font-size: 13px; cursor: pointer; margin-left: 8px; }
-#exh-rp-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 10000;
+.exh-rp-launch-btn { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff; border: none;
+  border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; margin: 0 8px 8px 0;
+  box-shadow: 0 6px 14px -6px rgba(0,152,187,.55); transition: transform .15s ease, box-shadow .15s ease; }
+.exh-rp-launch-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -8px rgba(0,152,187,.6); }
+#exh-rp-overlay { position: fixed; inset: 0; background: rgba(20,35,58,.55); z-index: 10000;
   display: flex; align-items: center; justify-content: center; }
 #exh-rp-overlay.exh-hidden { display: none; }
-#exh-rp-card { width: min(720px, 92vw); height: min(640px, 88vh); background: #fff;
-  border-radius: 12px; display: flex; flex-direction: column; overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0,0,0,.3); }
-#exh-rp-header { background: #a24fe0; color: #fff; padding: 12px 16px; display: flex;
-  justify-content: space-between; align-items: center; }
-#exh-rp-close { cursor: pointer; background: none; border: none; color: #fff; font-size: 18px; }
-#exh-rp-persona { padding: 10px 16px; background: #f7f0ff; font-size: 12px; border-bottom: 1px solid #e5d6f5; }
-#exh-rp-persona-title { font-weight: bold; color: #a24fe0; margin-bottom: 4px; }
-#exh-rp-body { flex: 1; overflow-y: auto; padding: 12px 16px; background: #f5f6f8; }
-.exh-rp-bubble { max-width: 85%; margin-bottom: 10px; padding: 8px 12px; border-radius: 10px;
-  font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
-.exh-rp-bubble.exh-rp-user { background: #2f6fed; color: #fff; margin-left: auto; }
-.exh-rp-bubble.exh-rp-ai { background: #fff; color: #222; border: 1px solid #e0e0e0; }
-#exh-rp-footer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #e0e0e0; align-items: flex-end; }
-#exh-rp-input { flex: 1; resize: none; border: 1px solid #ccc; border-radius: 8px; padding: 8px;
-  font-size: 13px; max-height: 80px; }
-.exh-rp-btn { border: none; border-radius: 8px; cursor: pointer; padding: 0 12px; height: 34px; }
-#exh-rp-mic { background: #eee; font-size: 16px; }
-#exh-rp-mic.exh-rp-recording { background: #ffdada; }
-#exh-rp-voice-toggle { background: #eee; font-size: 16px; }
-#exh-rp-voice-toggle.exh-rp-on { background: #dde6ff; }
-#exh-rp-send { background: #2f6fed; color: #fff; }
-#exh-rp-finish { background: #888; color: #fff; margin: 0 10px 10px; }
-.exh-rp-feedback { padding: 14px 16px; background: #fafbff; border-top: 1px solid #e5d6f5; font-size: 13px; }
-.exh-rp-scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
-.exh-rp-score { background: #f0e8ff; border-radius: 6px; padding: 6px; text-align: center; }
-.exh-rp-score b { display: block; font-size: 16px; color: #a24fe0; }
+#exh-rp-card { width: min(720px, 92vw); height: min(640px, 88vh); background: ${t.cloud};
+  border-radius: 18px; display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: 0 30px 70px -24px rgba(10,20,30,.45); }
+#exh-rp-header { background: linear-gradient(120deg, ${t.sora}, ${t.soraDeep}); color: #fff; padding: 14px 16px;
+  display: flex; justify-content: space-between; align-items: center; }
+#exh-rp-close { cursor: pointer; background: rgba(255,255,255,.18); border: none; color: #fff; font-size: 14px;
+  width: 26px; height: 26px; border-radius: 50%; }
+#exh-rp-persona { padding: 12px 16px; background: rgba(0,152,187,.08); font-size: 12px;
+  border-bottom: 1px solid ${t.mistLine}; }
+#exh-rp-persona-title { font-weight: 800; color: ${t.soraDeep}; margin-bottom: 4px; }
+#exh-rp-body { flex: 1; overflow-y: auto; padding: 14px 16px; background: ${t.cloud}; }
+.exh-rp-bubble { max-width: 85%; margin-bottom: 10px; padding: 10px 13px; border-radius: 14px;
+  font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.exh-rp-bubble.exh-rp-user { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff;
+  margin-left: auto; border-bottom-right-radius: 4px; }
+.exh-rp-bubble.exh-rp-ai { background: #fff; color: ${t.ink}; border: 1px solid ${t.mistLine};
+  border-bottom-left-radius: 4px; }
+#exh-rp-footer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid ${t.mistLine};
+  align-items: flex-end; background: #fff; }
+#exh-rp-input { flex: 1; resize: none; border: 1px solid ${t.mistLine}; border-radius: 10px; padding: 9px 11px;
+  font-size: 13px; max-height: 80px; font-family: inherit; background: ${t.cloud}; color: ${t.ink}; }
+#exh-rp-input:focus { outline: 2px solid ${t.sora}; outline-offset: 1px; }
+.exh-rp-btn { border: none; border-radius: 10px; cursor: pointer; padding: 0 14px; height: 36px; font-weight: 700; }
+#exh-rp-mic { background: rgba(255,201,60,.24); font-size: 16px; }
+#exh-rp-mic.exh-rp-recording { background: rgba(211,51,51,.18); }
+#exh-rp-voice-toggle { background: ${t.mist}; font-size: 16px; }
+#exh-rp-voice-toggle.exh-rp-on { background: rgba(0,152,187,.22); color: ${t.soraDeep}; }
+#exh-rp-send { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff; }
+#exh-rp-finish { background: linear-gradient(135deg, ${t.hinode}, #e8632e); color: #fff; margin: 0 10px 10px; }
+.exh-rp-feedback { padding: 16px; background: rgba(0,152,187,.05); border-top: 1px solid ${t.mistLine};
+  font-size: 13px; }
+.exh-rp-scores { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; }
+.exh-rp-score { background: rgba(0,152,187,.1); border-radius: 10px; padding: 8px; text-align: center; }
+.exh-rp-score b { display: block; font-size: 17px; color: ${t.soraDeep}; }
 `;
   document.head.appendChild(style);
 }

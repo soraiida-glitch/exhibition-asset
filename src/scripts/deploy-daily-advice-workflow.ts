@@ -1,6 +1,6 @@
-import { loadEnv, requireAppId } from '../config/env';
+import { loadEnv, patchEnvFile, requireAppId } from '../config/env';
 import { N8nClient } from '../lib/n8n-client';
-import { buildDailyAdviceWorkflow } from '../workflows/daily-advice-workflow';
+import { DAILY_ADVICE_WEBHOOK_PATH, buildDailyAdviceWorkflow } from '../workflows/daily-advice-workflow';
 
 function requireEnvValue(name: string, value: string | undefined): string {
   if (!value) {
@@ -13,6 +13,7 @@ async function main() {
   const env = loadEnv();
 
   const workflow = buildDailyAdviceWorkflow({
+    webhookSecret: requireEnvValue('N8N_WEBHOOK_SECRET', env.n8nWebhookSecret),
     openaiApiKey: requireEnvValue('OPENAI_API_KEY', env.openaiApiKey),
     kintoneBaseUrl: `https://${env.kintoneSubdomain}.cybozu.com`,
     opportunityAppId: requireAppId(env, 'kintoneAppIdOpportunity'),
@@ -35,7 +36,11 @@ async function main() {
 
   console.log('Activating workflow ...');
   await n8n.activateWorkflow(workflowId);
-  console.log('Done. Runs daily at 07:00 (n8n instance timezone).');
+
+  const webhookUrl = n8n.buildWebhookUrl(DAILY_ADVICE_WEBHOOK_PATH);
+  patchEnvFile({ N8N_DAILY_ADVICE_WEBHOOK_URL: webhookUrl });
+  console.log(`Wrote N8N_DAILY_ADVICE_WEBHOOK_URL=${webhookUrl} into .env`);
+  console.log('Done. Runs daily at 07:00 (n8n instance timezone); POST to the webhook URL above (with x-webhook-secret) to regenerate on demand.');
 }
 
 main().catch((err) => {

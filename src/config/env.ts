@@ -11,6 +11,7 @@ export interface AppEnv {
   n8nInstanceUrl: string;
   n8nApiKey: string;
   openaiApiKey?: string;
+  tavilyApiKey?: string;
   n8nWebhookSecret?: string;
   n8nAgentWebhookUrl?: string;
   n8nMeishiWebhookUrl?: string;
@@ -34,10 +35,11 @@ export interface AppEnv {
   pineconeIndexName?: string;
   pineconeHost?: string;
   pineconeNamespace?: string;
+  supabaseUrl?: string;
+  supabaseServiceRoleKey?: string;
   kintoneAppIdAccount?: number;
   kintoneAppIdOpportunity?: number;
   kintoneAppIdLead?: number;
-  kintoneAppIdConversationLog?: number;
   kintoneAppIdDailyAdvice?: number;
   kintoneAppIdRoleplaySession?: number;
   kintoneAppIdMeetingLog?: number;
@@ -46,7 +48,6 @@ export interface AppEnv {
   kintoneApiTokenAccount?: string;
   kintoneApiTokenOpportunity?: string;
   kintoneApiTokenLead?: string;
-  kintoneApiTokenConversationLog?: string;
   kintoneApiTokenDailyAdvice?: string;
   kintoneApiTokenRoleplaySession?: string;
   kintoneApiTokenMeetingLog?: string;
@@ -58,7 +59,6 @@ type AppIdKey =
   | 'kintoneAppIdAccount'
   | 'kintoneAppIdOpportunity'
   | 'kintoneAppIdLead'
-  | 'kintoneAppIdConversationLog'
   | 'kintoneAppIdDailyAdvice'
   | 'kintoneAppIdRoleplaySession'
   | 'kintoneAppIdMeetingLog'
@@ -95,6 +95,7 @@ export function loadEnv(): AppEnv {
     n8nInstanceUrl: process.env.N8N_INSTANCE_URL!,
     n8nApiKey: process.env.N8N_API_KEY!,
     openaiApiKey: process.env.OPENAI_API_KEY || undefined,
+    tavilyApiKey: process.env.TAVILY_API_KEY || undefined,
     n8nWebhookSecret: process.env.N8N_WEBHOOK_SECRET || undefined,
     n8nAgentWebhookUrl: process.env.N8N_KINTONE_AGENT_WEBHOOK_URL || undefined,
     n8nMeishiWebhookUrl: process.env.N8N_MEISHI_WEBHOOK_URL || undefined,
@@ -118,10 +119,11 @@ export function loadEnv(): AppEnv {
     pineconeIndexName: process.env.PINECONE_INDEX_NAME || undefined,
     pineconeHost: process.env.PINECONE_HOST || undefined,
     pineconeNamespace: process.env.PINECONE_NAMESPACE || undefined,
+    supabaseUrl: process.env.SUPABASE_URL || undefined,
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || undefined,
     kintoneAppIdAccount: parseOptionalAppId('KINTONE_APP_ID_ACCOUNT'),
     kintoneAppIdOpportunity: parseOptionalAppId('KINTONE_APP_ID_OPPORTUNITY'),
     kintoneAppIdLead: parseOptionalAppId('KINTONE_APP_ID_LEAD'),
-    kintoneAppIdConversationLog: parseOptionalAppId('KINTONE_APP_ID_CONVERSATION_LOG'),
     kintoneAppIdDailyAdvice: parseOptionalAppId('KINTONE_APP_ID_DAILY_ADVICE'),
     kintoneAppIdRoleplaySession: parseOptionalAppId('KINTONE_APP_ID_ROLEPLAY_SESSION'),
     kintoneAppIdMeetingLog: parseOptionalAppId('KINTONE_APP_ID_MEETING_LOG'),
@@ -130,7 +132,6 @@ export function loadEnv(): AppEnv {
     kintoneApiTokenAccount: process.env.KINTONE_API_TOKEN_ACCOUNT || undefined,
     kintoneApiTokenOpportunity: process.env.KINTONE_API_TOKEN_OPPORTUNITY || undefined,
     kintoneApiTokenLead: process.env.KINTONE_API_TOKEN_LEAD || undefined,
-    kintoneApiTokenConversationLog: process.env.KINTONE_API_TOKEN_CONVERSATION_LOG || undefined,
     kintoneApiTokenDailyAdvice: process.env.KINTONE_API_TOKEN_DAILY_ADVICE || undefined,
     kintoneApiTokenRoleplaySession: process.env.KINTONE_API_TOKEN_ROLEPLAY_SESSION || undefined,
     kintoneApiTokenMeetingLog: process.env.KINTONE_API_TOKEN_MEETING_LOG || undefined,

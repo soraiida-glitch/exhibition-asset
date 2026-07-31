@@ -32,16 +32,24 @@ async function main() {
     ),
     leadAppId: requireAppId(env, 'kintoneAppIdLead'),
     leadApiToken: requireEnvValue('KINTONE_API_TOKEN_LEAD', env.kintoneApiTokenLead),
-    conversationLogAppId: requireAppId(env, 'kintoneAppIdConversationLog'),
-    conversationLogApiToken: requireEnvValue(
-      'KINTONE_API_TOKEN_CONVERSATION_LOG',
-      env.kintoneApiTokenConversationLog,
-    ),
     dailyAdviceAppId: requireAppId(env, 'kintoneAppIdDailyAdvice'),
     dailyAdviceApiToken: requireEnvValue(
       'KINTONE_API_TOKEN_DAILY_ADVICE',
       env.kintoneApiTokenDailyAdvice,
     ),
+    salesScoreAppId: requireAppId(env, 'kintoneAppIdSalesScore'),
+    salesScoreApiToken: requireEnvValue(
+      'KINTONE_API_TOKEN_SALES_SCORE',
+      env.kintoneApiTokenSalesScore,
+    ),
+    supabaseUrl: requireEnvValue('SUPABASE_URL', env.supabaseUrl),
+    supabaseServiceRoleKey: requireEnvValue(
+      'SUPABASE_SERVICE_ROLE_KEY',
+      env.supabaseServiceRoleKey,
+    ),
+    tavilyApiKey: requireEnvValue('TAVILY_API_KEY', env.tavilyApiKey),
+    pineconeHost: requireEnvValue('PINECONE_HOST', env.pineconeHost),
+    pineconeApiKey: requireEnvValue('PINECONE_API_KEY', env.pineconeApiKey),
   });
 
   const n8n = new N8nClient({ instanceUrl: env.n8nInstanceUrl, apiKey: env.n8nApiKey });

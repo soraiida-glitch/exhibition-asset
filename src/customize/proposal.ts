@@ -1,4 +1,5 @@
 import { escHtml, formatApiError } from './chat';
+import { THEME } from './theme';
 
 const PROPOSAL_CONFIG = {
   opportunityAppId: __OPPORTUNITY_APP_ID__,
@@ -10,14 +11,17 @@ function injectProposalStyles(): void {
   if (document.getElementById('exh-proposal-styles')) return;
   const style = document.createElement('style');
   style.id = 'exh-proposal-styles';
+  const t = THEME;
   style.textContent = `
-.exh-proposal-btn { background: #2f9e6b; color: #fff; border: none; border-radius: 6px;
-  padding: 6px 12px; font-size: 13px; cursor: pointer; margin-left: 8px; }
-.exh-proposal-panel { margin-top: 10px; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px;
-  background: #f5fbf8; font-size: 13px; max-width: 480px; }
+.exh-proposal-btn { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff; border: none;
+  border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; margin: 0 8px 8px 0;
+  box-shadow: 0 6px 14px -6px rgba(0,152,187,.55); transition: transform .15s ease, box-shadow .15s ease; }
+.exh-proposal-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -8px rgba(0,152,187,.6); }
+.exh-proposal-panel { margin-top: 10px; padding: 14px; border: 1px solid ${t.mistLine}; border-radius: 12px;
+  background: #fff; font-size: 13px; max-width: 480px; }
 .exh-proposal-panel.exh-hidden { display: none; }
-.exh-proposal-link { display: inline-block; margin-top: 6px; background: #2f9e6b; color: #fff;
-  text-decoration: none; border-radius: 6px; padding: 6px 14px; }
+.exh-proposal-link { display: inline-block; margin-top: 6px; background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep});
+  color: #fff; text-decoration: none; font-weight: 700; border-radius: 8px; padding: 7px 16px; }
 `;
   document.head.appendChild(style);
 }

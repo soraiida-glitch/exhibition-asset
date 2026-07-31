@@ -1,4 +1,5 @@
 import { escHtml, formatApiError } from './chat';
+import { THEME } from './theme';
 
 interface SalesScoreRecord {
   assignee_name?: { value?: string };
@@ -9,6 +10,7 @@ interface SalesScoreRecord {
   outcome_score?: { value?: string };
   ai_comment?: { value?: string };
   status?: { value?: string };
+  period_end?: { value?: string };
 }
 
 const SS_CONFIG = {
@@ -25,17 +27,40 @@ function injectSalesScoringStyles(): void {
   if (document.getElementById('exh-ss-styles')) return;
   const style = document.createElement('style');
   style.id = 'exh-ss-styles';
+  const t = THEME;
   style.textContent = `
-.exh-ss-btn { background: #c77c1f; color: #fff; border: none; border-radius: 6px;
-  padding: 6px 12px; font-size: 13px; cursor: pointer; margin-left: 8px; }
-.exh-ss-panel { margin-top: 10px; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px;
-  background: #fff8ef; font-size: 13px; max-width: 560px; }
+.exh-ss-btn { background: linear-gradient(135deg, ${t.hinode}, #e8632e); color: #fff; border: none;
+  border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 700; cursor: pointer; margin-left: 8px; }
+.exh-ss-panel { margin-top: 10px; padding: 14px; border: 1px solid ${t.mistLine}; border-radius: 12px;
+  background: #fff; font-size: 13px; max-width: 560px; }
 .exh-ss-panel.exh-hidden { display: none; }
 .exh-ss-inputs { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.exh-ss-inputs input { border: 1px solid #ccc; border-radius: 4px; padding: 4px; font-size: 12px; }
-.exh-ss-card { border-bottom: 1px solid #eee; padding: 6px 0; }
-.exh-ss-rank { display: inline-block; width: 22px; height: 22px; text-align: center;
-  border-radius: 50%; background: #c77c1f; color: #fff; font-weight: bold; margin-right: 6px; }
+.exh-ss-inputs input { border: 1px solid ${t.mistLine}; border-radius: 6px; padding: 5px 7px; font-size: 12px;
+  background: ${t.cloud}; color: ${t.ink}; }
+
+.exh-ss-rank-list { display: flex; flex-direction: column; gap: 10px; }
+.exh-ss-rank-card { display: grid; grid-template-columns: 38px 1fr auto; gap: 12px; align-items: center;
+  padding: 10px 12px; border-radius: 12px; background: ${t.cloud}; border: 1px solid ${t.mistLine}; }
+.exh-ss-rank-card.exh-ss-top1 { border-color: ${t.sora}; background: linear-gradient(120deg, rgba(0,152,187,.10), rgba(0,152,187,.03)); }
+.exh-ss-rank-badge { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-weight: 800; font-size: 14px; color: #fff;
+  background: linear-gradient(135deg, #5aa9bd, ${t.soraDeep}); }
+.exh-ss-rank-card.exh-ss-top1 .exh-ss-rank-badge { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep});
+  font-size: 16px; box-shadow: 0 0 0 4px rgba(0,152,187,.16); }
+.exh-ss-rank-card.exh-ss-top3 .exh-ss-rank-badge { background: linear-gradient(135deg, ${t.mistLine}, #9fbfc9); color: ${t.ink}; }
+.exh-ss-name-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.exh-ss-name { font-weight: 800; font-size: 14px; }
+.exh-ss-grade { font-size: 10.5px; font-weight: 800; padding: 1px 7px; border-radius: 999px;
+  background: rgba(0,152,187,.14); color: ${t.soraDeep}; }
+.exh-ss-comment { font-size: 12px; color: #5a6b7a; margin-top: 3px; }
+.exh-ss-bars { display: flex; gap: 8px; margin-top: 6px; }
+.exh-ss-bar { flex: 1; }
+.exh-ss-bar-label { font-size: 10px; color: #5a6b7a; margin-bottom: 2px; }
+.exh-ss-bar-track { height: 5px; border-radius: 999px; background: ${t.mist}; overflow: hidden; }
+.exh-ss-bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, ${t.sora}, ${t.soraDeep}); }
+.exh-ss-score { text-align: right; }
+.exh-ss-score .exh-ss-num { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.exh-ss-score .exh-ss-unit { font-size: 10.5px; color: #5a6b7a; }
 `;
   document.head.appendChild(style);
 }
@@ -47,25 +72,55 @@ function defaultPeriod(): { start: string; end: string } {
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
+const MEDALS = ['🥇', '🥈', '🥉'];
+
 function renderScores(panel: HTMLElement, records: SalesScoreRecord[]): void {
   if (!records.length) {
     panel.innerHTML = '<div>まだ結果がありません...</div>';
     return;
   }
-  panel.innerHTML = records
-    .map((r) => {
-      const status = r.status?.value;
-      if (status !== '完了') {
-        return `<div class="exh-ss-card">${escHtml(r.assignee_name?.value ?? '')} — 生成中...</div>`;
-      }
-      return `<div class="exh-ss-card">
-        <span class="exh-ss-rank">${escHtml(r.score_rank?.value ?? '?')}</span>
-        <strong>${escHtml(r.assignee_name?.value ?? '')}</strong> 総合${escHtml(r.total_score?.value ?? '?')}点
-        (実行率${escHtml(r.exec_rate?.value ?? '?')} / 行動${escHtml(r.behavior_score?.value ?? '?')} / 成果${escHtml(r.outcome_score?.value ?? '?')})
-        <div>${escHtml(r.ai_comment?.value ?? '')}</div>
+
+  const pending = records.filter((r) => r.status?.value !== '完了');
+  // 順位(1位/2位/3位)はスコアの序列、score_rank(S~D評価)は別概念の評価グレードなので、
+  // カード内では「バッジ=順位」「ピル=評価」と明確に分けて出す。
+  const ranked = records
+    .filter((r) => r.status?.value === '完了')
+    .slice()
+    .sort((a, b) => Number(b.total_score?.value ?? 0) - Number(a.total_score?.value ?? 0));
+
+  const pendingHtml = pending
+    .map((r) => `<div class="exh-ss-comment">${escHtml(r.assignee_name?.value ?? '')} — 生成中...</div>`)
+    .join('');
+
+  const rankedHtml = ranked
+    .map((r, idx) => {
+      const topClass = idx === 0 ? ' exh-ss-top1' : idx === 1 ? ' exh-ss-top2' : idx === 2 ? ' exh-ss-top3' : '';
+      const badge = idx < 3 ? MEDALS[idx] : String(idx + 1);
+      const bar = (label: string, raw: string | undefined) => {
+        const pct = Math.max(0, Math.min(100, Number(raw ?? 0)));
+        return `<div class="exh-ss-bar"><div class="exh-ss-bar-label">${label} ${escHtml(raw ?? '?')}</div>
+          <div class="exh-ss-bar-track"><div class="exh-ss-bar-fill" style="width:${pct}%"></div></div></div>`;
+      };
+      return `<div class="exh-ss-rank-card${topClass}">
+        <div class="exh-ss-rank-badge">${badge}</div>
+        <div>
+          <div class="exh-ss-name-row">
+            <span class="exh-ss-name">${escHtml(r.assignee_name?.value ?? '')}</span>
+            <span class="exh-ss-grade">${escHtml(r.score_rank?.value ?? '?')}評価</span>
+          </div>
+          ${r.ai_comment?.value ? `<div class="exh-ss-comment">${escHtml(r.ai_comment.value)}</div>` : ''}
+          <div class="exh-ss-bars">
+            ${bar('実行率', r.exec_rate?.value)}
+            ${bar('行動', r.behavior_score?.value)}
+            ${bar('成果', r.outcome_score?.value)}
+          </div>
+        </div>
+        <div class="exh-ss-score"><div class="exh-ss-num">${escHtml(r.total_score?.value ?? '?')}</div><div class="exh-ss-unit">総合点</div></div>
       </div>`;
     })
     .join('');
+
+  panel.innerHTML = `${pendingHtml}<div class="exh-ss-rank-list">${rankedHtml}</div>`;
 }
 
 async function pollResults(periodStart: string, periodEnd: string, panel: HTMLElement): Promise<void> {
@@ -82,6 +137,32 @@ async function pollResults(periodStart: string, periodEnd: string, panel: HTMLEl
     if (result.records.length > 0 && result.records.every((r) => r.status?.value === '完了')) {
       return;
     }
+  }
+}
+
+/** Auto-populates the ranking on page load from the most recently completed scoring run, so
+ * exhibition staff see a live leaderboard without first having to click "全員スコアリング実行". */
+async function loadLatestScores(panel: HTMLElement): Promise<void> {
+  try {
+    const latestResult = (await kintone.api('/k/v1/records', 'GET', {
+      app: Number(SS_CONFIG.salesScoreAppId),
+      // kintone reserves the "status" field code for process management and only allows the
+      // in/not in operators on it (confirmed live: "=" fails with GAIA_IQ03).
+      query: 'status in ("完了") order by period_end desc limit 1',
+    })) as { records: SalesScoreRecord[] };
+    const latestPeriodEnd = latestResult.records[0]?.period_end?.value;
+    if (!latestPeriodEnd) {
+      panel.innerHTML = '<div>まだスコアリング結果がありません。上のボタンから実行してください。</div>';
+      return;
+    }
+
+    const result = (await kintone.api('/k/v1/records', 'GET', {
+      app: Number(SS_CONFIG.salesScoreAppId),
+      query: `period_end = "${latestPeriodEnd.replace(/"/g, '')}"`,
+    })) as { records: SalesScoreRecord[] };
+    renderScores(panel, result.records);
+  } catch (err) {
+    panel.textContent = 'ランキングの取得に失敗しました: ' + formatApiError(err);
   }
 }
 
@@ -130,7 +211,8 @@ export function initSalesScoring(appId: string): void {
 
   const panel = document.createElement('div');
   panel.id = 'exh-ss-panel';
-  panel.className = 'exh-ss-panel exh-hidden';
+  panel.className = 'exh-ss-panel';
+  panel.innerHTML = '<div>読み込み中...</div>';
   document.body.appendChild(panel);
 
   btn.addEventListener('click', () => {
@@ -138,4 +220,6 @@ export function initSalesScoring(appId: string): void {
     const periodEnd = (document.getElementById('exh-ss-period-end') as HTMLInputElement).value;
     void handleRunScoring(panel, periodStart, periodEnd);
   });
+
+  void loadLatestScores(panel);
 }

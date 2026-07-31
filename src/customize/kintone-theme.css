@@ -1,0 +1,66 @@
+/*
+ * Visual refresh for exhibition_* apps' native list/detail screens — attached via kintone's
+ * per-app customize CSS slot (same mechanism as chat.js), so it only ever applies to our own
+ * apps, never to any other app in the kintone environment.
+ *
+ * The class names below (the "-gaia" suffixed ones, plus .gaia-argoui-*/.control-*-field-gaia)
+ * are kintone's own internal, UNDOCUMENTED class names — not a public API, and they may be
+ * renamed in a future kintone platform update. That's an acceptable risk here: this file is
+ * purely cosmetic, so if a class name ever stops matching, the affected screen just reverts to
+ * kintone's stock look — no functionality depends on this CSS applying.
+ *
+ * Colors mirror src/customize/theme.ts's THEME constants (kept in sync manually, since this is
+ * a plain CSS file with no build step — there is no TS/JS pipeline to import the constants
+ * through).
+ */
+
+/* ---- list view ---- */
+.gaia-argoui-app-toolbar {
+  background: linear-gradient(120deg, #0098bb 0%, #00728e 100%) !important;
+}
+
+.recordlist-header-cell-gaia {
+  background: rgba(0, 152, 187, 0.08) !important;
+  color: #14233a !important;
+  font-weight: 700 !important;
+}
+
+.recordlist-row-gaia:hover .recordlist-cell-gaia {
+  background: rgba(0, 152, 187, 0.07) !important;
+}
+
+.recordlist-row-gaia:nth-child(even) .recordlist-cell-gaia {
+  background: rgba(0, 152, 187, 0.03);
+}
+
+/* ---- detail view ----
+ * #record-gaia (a real, unique kintone element id, confirmed via live DOM inspection) is the
+ * detail form's actual container — ".gaia-argoui-app-show-detail" was an earlier guess that does
+ * not exist in the rendered page, so every rule scoped under it was a silent no-op. Likewise the
+ * per-field value class is ".value-<numeric field id>", not ".value-<fieldCode>" as on the list
+ * view, so field-code-specific targeting (e.g. emphasizing the amount field) isn't done via CSS
+ * here — see record-summary.ts, which reads field values directly through the API instead. */
+#record-gaia .control-label-gaia {
+  color: #4a6472 !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+  letter-spacing: 0.02em;
+}
+
+#record-gaia .control-value-gaia {
+  color: #14233a !important;
+  font-weight: 600;
+}
+
+/* A colored left rail per field row gives the form a sense of structure instead of reading as an
+   undifferentiated stack of plain text boxes. */
+#record-gaia .control-gaia {
+  border-left: 3px solid rgba(0, 152, 187, 0.3);
+  padding-left: 10px;
+  margin-bottom: 6px;
+  transition: border-color 0.15s ease;
+}
+
+#record-gaia .control-gaia:hover {
+  border-left-color: #0098bb;
+}

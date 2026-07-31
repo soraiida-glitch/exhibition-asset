@@ -8,6 +8,7 @@ import { KintoneAdminClient } from '../lib/kintone-client';
 // can't find it — resolve the well-known node_modules path directly instead.
 const VITE_BIN = path.resolve(process.cwd(), 'node_modules/vite/bin/vite.js');
 const BUNDLE_PATH = path.resolve(process.cwd(), 'dist/customize/chat.js');
+const THEME_CSS_PATH = path.resolve(process.cwd(), 'src/customize/kintone-theme.css');
 
 async function main() {
   const env = loadEnv();
@@ -16,6 +17,7 @@ async function main() {
   execFileSync(process.execPath, [VITE_BIN, 'build'], { stdio: 'inherit' });
 
   const bundle = fs.readFileSync(BUNDLE_PATH, 'utf-8');
+  const themeCss = fs.readFileSync(THEME_CSS_PATH, 'utf-8');
 
   const kintone = new KintoneAdminClient({
     subdomain: env.kintoneSubdomain,
@@ -23,25 +25,43 @@ async function main() {
     password: env.kintoneAdminPassword,
   });
 
-  const targets: Array<{ label: string; appId: number }> = [
+  // These 4 get both the chat.js widget and the visual-refresh CSS.
+  const jsAndCssTargets: Array<{ label: string; appId: number }> = [
     { label: 'exhibition_取引先', appId: requireAppId(env, 'kintoneAppIdAccount') },
     { label: 'exhibition_案件', appId: requireAppId(env, 'kintoneAppIdOpportunity') },
     { label: 'exhibition_リード', appId: requireAppId(env, 'kintoneAppIdLead') },
     { label: 'exhibition_担当者', appId: requireAppId(env, 'kintoneAppIdAssignee') },
   ];
 
+  // These have no interactive widget of their own, but get the same list/detail view CSS
+  // refresh for visual consistency across all exhibition_* apps.
+  const cssOnlyTargets: Array<{ label: string; appId: number }> = [
+    { label: 'exhibition_デイリーアドバイス', appId: requireAppId(env, 'kintoneAppIdDailyAdvice') },
+    { label: 'exhibition_ロールプレイセッション', appId: requireAppId(env, 'kintoneAppIdRoleplaySession') },
+    { label: 'exhibition_商談ログ', appId: requireAppId(env, 'kintoneAppIdMeetingLog') },
+    { label: 'exhibition_営業評価', appId: requireAppId(env, 'kintoneAppIdSalesScore') },
+  ];
+
   // A fileKey is consumed on first use — reusing the same fileKey across apps, or even twice
   // within one customize.json call (desktop.js + mobile.js), fails with GAIA_DC04 "duplicate
   // fileKey". Each attachment point needs its own fresh upload.
-  for (const target of targets) {
-    console.log(`Uploading chat.js for ${target.label} ...`);
-    const desktopFileKey = await kintone.uploadFile('chat.js', bundle);
-    const mobileFileKey = await kintone.uploadFile('chat.js', bundle);
+  for (const target of jsAndCssTargets) {
+    console.log(`Uploading chat.js + kintone-theme.css for ${target.label} ...`);
+    const desktopJsKey = await kintone.uploadFile('chat.js', bundle);
+    const mobileJsKey = await kintone.uploadFile('chat.js', bundle);
+    const desktopCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
+    const mobileCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
 
-    console.log(`Attaching chat.js to ${target.label} (app id ${target.appId}) ...`);
+    console.log(`Attaching to ${target.label} (app id ${target.appId}) ...`);
     await kintone.setCustomize(target.appId, {
-      desktop: { js: [{ type: 'FILE', file: { fileKey: desktopFileKey } }], css: [] },
-      mobile: { js: [{ type: 'FILE', file: { fileKey: mobileFileKey } }], css: [] },
+      desktop: {
+        js: [{ type: 'FILE', file: { fileKey: desktopJsKey } }],
+        css: [{ type: 'FILE', file: { fileKey: desktopCssKey } }],
+      },
+      mobile: {
+        js: [{ type: 'FILE', file: { fileKey: mobileJsKey } }],
+        css: [{ type: 'FILE', file: { fileKey: mobileCssKey } }],
+      },
       scope: 'ALL',
     });
 
@@ -52,7 +72,25 @@ async function main() {
     await kintone.waitForDeploy(target.appId);
   }
 
-  console.log('Done. chat.js is now attached to 取引先/案件/リード/担当者.');
+  for (const target of cssOnlyTargets) {
+    console.log(`Uploading kintone-theme.css for ${target.label} ...`);
+    const desktopCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
+    const mobileCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
+
+    console.log(`Attaching to ${target.label} (app id ${target.appId}) ...`);
+    await kintone.setCustomize(target.appId, {
+      desktop: { js: [], css: [{ type: 'FILE', file: { fileKey: desktopCssKey } }] },
+      mobile: { js: [], css: [{ type: 'FILE', file: { fileKey: mobileCssKey } }] },
+      scope: 'ALL',
+    });
+
+    console.log(`Deploying customize settings for ${target.label} ...`);
+    await kintone.deployApp(target.appId);
+    await kintone.waitForDeploy(target.appId);
+  }
+
+  console.log('Done. chat.js + kintone-theme.css attached to 取引先/案件/リード/担当者.');
+  console.log('kintone-theme.css attached to the remaining 5 exhibition_* apps.');
 }
 
 main().catch((err) => {

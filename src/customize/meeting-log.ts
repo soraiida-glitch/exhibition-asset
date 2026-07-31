@@ -1,4 +1,5 @@
 import { escHtml, formatApiError } from './chat';
+import { THEME } from './theme';
 
 interface MeetingLogRecord {
   status?: { value?: string };
@@ -26,11 +27,14 @@ function injectMeetingLogStyles(): void {
   if (document.getElementById('exh-ml-styles')) return;
   const style = document.createElement('style');
   style.id = 'exh-ml-styles';
+  const t = THEME;
   style.textContent = `
-.exh-ml-btn { background: #1f9d6b; color: #fff; border: none; border-radius: 6px;
-  padding: 6px 12px; font-size: 13px; cursor: pointer; margin-left: 8px; }
-.exh-ml-panel { margin-top: 10px; padding: 12px; border: 1px solid #e0e0e0; border-radius: 8px;
-  background: #f5fbf8; font-size: 13px; max-width: 480px; }
+.exh-ml-btn { background: linear-gradient(135deg, ${t.sora}, ${t.soraDeep}); color: #fff; border: none;
+  border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; margin: 0 8px 8px 0;
+  box-shadow: 0 6px 14px -6px rgba(0,152,187,.55); transition: transform .15s ease, box-shadow .15s ease; }
+.exh-ml-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 20px -8px rgba(0,152,187,.6); }
+.exh-ml-panel { margin-top: 10px; padding: 14px; border: 1px solid ${t.mistLine}; border-radius: 12px;
+  background: #fff; font-size: 13px; max-width: 480px; }
 .exh-ml-panel.exh-hidden { display: none; }
 .exh-ml-section { margin-top: 8px; }
 .exh-ml-section ul { margin: 4px 0 0; padding-left: 18px; }

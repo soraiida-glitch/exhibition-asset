@@ -166,7 +166,12 @@ return records.map((r) => ({ json: {
             { name: 'app', value: String(config.opportunityAppId) },
             {
               name: 'query',
-              value: '={{ "owner = \\"" + $json.assigneeName.replace(/"/g, "") + "\\" limit 100" }}',
+              // Matches by assigneeCode, not assigneeName: daily-advice-workflow.ts writes
+              // exhibition_案件's owner field as the assignee's *code* (it's what the chat's
+              // "今日のやること" lookup joins on via kintone.getLoginUser().code), and for a real
+              // login whose display name differs from its code (e.g. a shared service account),
+              // matching by name here would silently find zero deals.
+              value: '={{ "owner = \\"" + $json.assigneeCode.replace(/"/g, "") + "\\" limit 100" }}',
             },
           ],
         },
@@ -180,18 +185,22 @@ return records.map((r) => ({ json: {
       typeVersion: 2,
       position: nextPos(),
       parameters: {
+        // Code nodes default to "run once for all items", which silently collapses the 3-item
+        // per-assignee fan-out from "Split Assignees" down to a single execution over item[0]
+        // only. This code assumes $json is "the current item", so it must run once per item.
+        mode: 'runOnceForEachItem',
         jsCode: `
 const deals = $json.records || [];
 const dealCount = deals.length;
 const closedWonCount = deals.filter((d) => d.stage && d.stage.value === '成約').length;
 const dealIds = deals.map((d) => d['$id'] && d['$id'].value).filter(Boolean);
-return [{ json: {
-  assigneeCode: $node["Split Assignees"].json.assigneeCode,
-  assigneeName: $node["Split Assignees"].json.assigneeName,
+return { json: {
+  assigneeCode: $('Split Assignees').item.json.assigneeCode,
+  assigneeName: $('Split Assignees').item.json.assigneeName,
   dealCount,
   closedWonCount,
   dealIdsQuery: dealIds.length ? dealIds.map((id) => '"' + id + '"').join(',') : '',
-} }];
+} };
 `.trim(),
       },
     },
@@ -213,7 +222,11 @@ return [{ json: {
             {
               name: 'query',
               value:
-                '={{ "advice_date >= \\"" + $node["Verify Secret"].json.periodStart + "\\" and advice_date <= \\"" + $node["Verify Secret"].json.periodEnd + "\\" and assignee_code = \\"" + $json.assigneeCode.replace(/"/g, "") + "\\" limit 100" }}',
+                // $('Verify Secret').first() (not the legacy $node[...] accessor) sidesteps n8n's
+                // paired-item validation — "Verify Secret" only ever emits one global item, but
+                // this branch may be running as item index 1/2 of the per-assignee fan-out, and
+                // the legacy accessor's implicit pairedItem check throws on that index mismatch.
+                '={{ "advice_date >= \\"" + $(\'Verify Secret\').first().json.periodStart + "\\" and advice_date <= \\"" + $(\'Verify Secret\').first().json.periodEnd + "\\" and assignee_code = \\"" + $json.assigneeCode.replace(/"/g, "") + "\\" limit 100" }}',
             },
           ],
         },
@@ -238,7 +251,7 @@ return [{ json: {
             {
               name: 'query',
               value:
-                '={{ $node["Build Deal Context"].json.dealIdsQuery ? ("deal_record_id in (" + $node["Build Deal Context"].json.dealIdsQuery + ") limit 100") : "id = 0" }}',
+                '={{ $(\'Build Deal Context\').item.json.dealIdsQuery ? ("deal_record_id in (" + $(\'Build Deal Context\').item.json.dealIdsQuery + ") limit 100") : "id = 0" }}',
             },
           ],
         },
@@ -252,9 +265,10 @@ return [{ json: {
       typeVersion: 2,
       position: nextPos(),
       parameters: {
+        mode: 'runOnceForEachItem',
         jsCode: `
-const context = $node["Build Deal Context"].json;
-const dailyAdvices = $node["Fetch Daily Advices"].json.records || [];
+const context = $('Build Deal Context').item.json;
+const dailyAdvices = $('Fetch Daily Advices').item.json.records || [];
 const meetingLogs = $json.records || [];
 
 // Deterministic (no AI) execution-rate calc mirroring Salesforce-asset's original formula:
@@ -300,7 +314,7 @@ const avgSentiment = sentimentScores.length
   ? Math.round((sentimentScores.reduce((a, b) => a + b, 0) / sentimentScores.length) * 10) / 10
   : null;
 
-return [{ json: {
+return { json: {
   assigneeCode: context.assigneeCode,
   assigneeName: context.assigneeName,
   dealCount: context.dealCount,
@@ -309,7 +323,7 @@ return [{ json: {
   meetingLogCount: meetingLogs.length,
   avgSentiment,
   neglectedActions,
-} }];
+} };
 `.trim(),
       },
     },
@@ -337,8 +351,9 @@ return [{ json: {
       typeVersion: 2,
       position: nextPos(),
       parameters: {
+        mode: 'runOnceForEachItem',
         jsCode: `
-const metrics = $node["Aggregate Metrics"].json;
+const metrics = $('Aggregate Metrics').item.json;
 const FALLBACK = { behavior_score: 0, outcome_score: 0, ai_comment: '' };
 let parsed;
 try {
@@ -359,7 +374,7 @@ else if (totalScore >= 55) rank = 'B';
 else if (totalScore >= 40) rank = 'C';
 else rank = 'D';
 
-return [{ json: {
+return { json: {
   assigneeCode: metrics.assigneeCode,
   assigneeName: metrics.assigneeName,
   execRate: metrics.execRate,
@@ -369,9 +384,9 @@ return [{ json: {
   rank,
   aiComment: parsed.ai_comment || FALLBACK.ai_comment,
   detailJson: JSON.stringify(metrics),
-  periodStart: $node["Verify Secret"].json.periodStart,
-  periodEnd: $node["Verify Secret"].json.periodEnd,
-} }];
+  periodStart: $('Verify Secret').first().json.periodStart,
+  periodEnd: $('Verify Secret').first().json.periodEnd,
+} };
 `.trim(),
       },
     },
@@ -427,7 +442,7 @@ return [{ json: {
         },
         sendBody: true,
         specifyBody: 'json',
-        jsonBody: `={{ JSON.stringify({ app: ${config.salesScoreAppId}, id: Number($json.records[0].$id.value), record: { exec_rate: { value: $node["Calculate Total & Rank"].json.execRate }, behavior_score: { value: $node["Calculate Total & Rank"].json.behaviorScore }, outcome_score: { value: $node["Calculate Total & Rank"].json.outcomeScore }, total_score: { value: $node["Calculate Total & Rank"].json.totalScore }, score_rank: { value: $node["Calculate Total & Rank"].json.rank }, ai_comment: { value: $node["Calculate Total & Rank"].json.aiComment }, detail_json: { value: $node["Calculate Total & Rank"].json.detailJson }, status: { value: "完了" }, generated_at: { value: new Date().toISOString() } } }) }}`,
+        jsonBody: `={{ JSON.stringify({ app: ${config.salesScoreAppId}, id: Number($json.records[0].$id.value), record: { exec_rate: { value: $('Calculate Total & Rank').item.json.execRate }, behavior_score: { value: $('Calculate Total & Rank').item.json.behaviorScore }, outcome_score: { value: $('Calculate Total & Rank').item.json.outcomeScore }, total_score: { value: $('Calculate Total & Rank').item.json.totalScore }, score_rank: { value: $('Calculate Total & Rank').item.json.rank }, ai_comment: { value: $('Calculate Total & Rank').item.json.aiComment }, detail_json: { value: $('Calculate Total & Rank').item.json.detailJson }, status: { value: "完了" }, generated_at: { value: new Date().toISOString() } } }) }}`,
         options: {},
       },
     },
@@ -446,7 +461,7 @@ return [{ json: {
         },
         sendBody: true,
         specifyBody: 'json',
-        jsonBody: `={{ JSON.stringify({ app: ${config.salesScoreAppId}, record: { assignee_code: { value: $node["Calculate Total & Rank"].json.assigneeCode }, assignee_name: { value: $node["Calculate Total & Rank"].json.assigneeName }, period_start: { value: $node["Calculate Total & Rank"].json.periodStart }, period_end: { value: $node["Calculate Total & Rank"].json.periodEnd }, exec_rate: { value: $node["Calculate Total & Rank"].json.execRate }, behavior_score: { value: $node["Calculate Total & Rank"].json.behaviorScore }, outcome_score: { value: $node["Calculate Total & Rank"].json.outcomeScore }, total_score: { value: $node["Calculate Total & Rank"].json.totalScore }, score_rank: { value: $node["Calculate Total & Rank"].json.rank }, ai_comment: { value: $node["Calculate Total & Rank"].json.aiComment }, detail_json: { value: $node["Calculate Total & Rank"].json.detailJson }, status: { value: "完了" }, generated_at: { value: new Date().toISOString() } } }) }}`,
+        jsonBody: `={{ JSON.stringify({ app: ${config.salesScoreAppId}, record: { assignee_code: { value: $('Calculate Total & Rank').item.json.assigneeCode }, assignee_name: { value: $('Calculate Total & Rank').item.json.assigneeName }, period_start: { value: $('Calculate Total & Rank').item.json.periodStart }, period_end: { value: $('Calculate Total & Rank').item.json.periodEnd }, exec_rate: { value: $('Calculate Total & Rank').item.json.execRate }, behavior_score: { value: $('Calculate Total & Rank').item.json.behaviorScore }, outcome_score: { value: $('Calculate Total & Rank').item.json.outcomeScore }, total_score: { value: $('Calculate Total & Rank').item.json.totalScore }, score_rank: { value: $('Calculate Total & Rank').item.json.rank }, ai_comment: { value: $('Calculate Total & Rank').item.json.aiComment }, detail_json: { value: $('Calculate Total & Rank').item.json.detailJson }, status: { value: "完了" }, generated_at: { value: new Date().toISOString() } } }) }}`,
         options: {},
       },
     },
