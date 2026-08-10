@@ -40,7 +40,10 @@ describe('buildPptxCodeNodeSource', () => {
     ) as Array<{ json: { base64: string; fileName: string } }>;
 
     expect(result[0].json.base64.length).toBeGreaterThan(100_000);
-    expect(result[0].json.fileName).toBe('提案書_テスト株式会社_2026年7月21日.pptx');
+    // The timestamp suffix is computed from the real clock at generation time (not the `today`
+    // input) specifically so two proposals for the same customer on the same day never collide
+    // on Box — see pptx-template.ts's uniqueStamp comment.
+    expect(result[0].json.fileName).toMatch(/^提案書_テスト株式会社_\d{14}\.pptx$/);
 
     // A valid ZIP's local file header signature, confirming buildZip() assembled real ZIP bytes.
     const pptxBuffer = Buffer.from(result[0].json.base64, 'base64');

@@ -280,7 +280,12 @@ export function buildPptxCodeNodeSource(templatePath: string): string {
   lines.push('const pptxBuf  = buildZip(zipEntries);');
   lines.push("const base64   = pptxBuf.toString('base64');");
   lines.push("const safeName = customerName.replace(/[^\\u30A0-\\u30FF\\u3040-\\u309F\\u4E00-\\u9FFF\\w]/g, '_').trim() || 'proposal';");
-  lines.push("const fileName = `提案書_${safeName}_${today || 'draft'}.pptx`;");
+  // Seconds-granular timestamp, not just the day-level `today` string — two proposals generated
+  // for the same customer on the same day previously produced the same filename, so Box's upload
+  // 409'd on the second one and (see Upload to Box / Resolve Box File ID below) the stale first
+  // file's link was returned instead of the freshly regenerated content.
+  lines.push("const uniqueStamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);");
+  lines.push("const fileName = `提案書_${safeName}_${uniqueStamp}.pptx`;");
   lines.push('');
   lines.push('return [{ json: { base64, fileName, customerName, dealName } }];');
 

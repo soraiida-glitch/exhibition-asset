@@ -23,6 +23,7 @@
     "setup:sales-scoring": "tsx src/scripts/deploy-sales-scoring-workflow.ts",
     "setup:proposal": "tsx src/scripts/deploy-proposal-workflow.ts",
     "sync:bulk": "tsx src/scripts/bulk-sync-pinecone.ts",
+    "sync:manuals": "tsx src/scripts/sync-manuals-pinecone.ts",
     "build:customize": "vite build",
     "deploy:customize": "tsx src/scripts/deploy-customize.ts",
     "typecheck": "tsc --noEmit",

@@ -17,40 +17,50 @@ export interface ProposalWorkflowConfig {
   pptxCodeSource: string;
 }
 
-const PROPOSAL_CONTENT_SYSTEM_PROMPT = `あなたは提案資料作成のプロフェッショナルです。与えられた案件情報(商談メモ・顧客の課題を含む)を
-分析し、この案件・顧客に合わせた提案資料の文章をすべて日本語で生成してください。汎用的な文言ではなく、
-与えられた情報から読み取れる具体的な課題・業種・状況に即した内容にしてください。情報が少ない場合でも、
-案件名や概要から自然に推測できる範囲で具体的に書いてください。
+const PROPOSAL_CONTENT_SYSTEM_PROMPT = `あなたは大手コンサルティングファームのシニアセールスコンサルタントです。
+与えられた案件情報(商談メモ・顧客の課題を含む)をもとに、顧客の経営陣・決裁者の心を動かす
+提案資料の文章を日本語で生成します。
 
-回答は必ず次のJSON形式のみで返してください(説明文やコードブロックは不要):
+【必須原則】
+1. 顧客の業種・状況に基づいた具体的な表現にする(汎用的・抽象的な表現は厳禁)。情報が少ない
+   場合でも、案件名や概要から自然に推測できる範囲で具体的に書くこと。
+2. 「何ができるか」ではなく「導入後に何が変わるか・いくら得するか」で語る。
+3. 数字・期間を積極的に盛り込み、決裁者が即断できる説得力を持たせる。
+4. 各フィールドの文字数上限を厳守すること。上限を超えると資料のレイアウトが崩れる
+   (テキストボックスの高さは想定文字数に合わせて設計されている)。
+
+回答は必ず次のJSON形式のみで返してください(説明文やコードブロックは不要)。括弧内の数字は
+そのフィールドの文字数上限:
 {
   "CLIENT_NAME": "顧客(取引先)名",
-  "PROPOSAL_TITLE": "提案書のタイトル(案件名ベース)",
-  "PROPOSAL_SUBTITLE": "サブタイトル(フェーズや日付を含めた一言)",
-  "CHALLENGE_1": "顧客が抱える課題1(具体的に)",
-  "CHALLENGE_2": "顧客が抱える課題2",
-  "CHALLENGE_3": "顧客が抱える課題3",
-  "PROPOSAL_SUMMARY": "提案概要(2〜3文)",
-  "KEY_POINT_1": "提案の訴求ポイント1",
-  "KEY_POINT_2": "提案の訴求ポイント2",
-  "KEY_POINT_3": "提案の訴求ポイント3",
-  "FEATURE_1": "機能・特徴1(タイトル｜説明の形式)",
-  "FEATURE_2": "機能・特徴2",
-  "FEATURE_3": "機能・特徴3",
-  "FEATURE_4": "機能・特徴4",
-  "KPI_LABEL_1": "効果指標1の名称", "KPI_VALUE_1": "数値のみ", "KPI_UNIT_1": "単位(%など)", "KPI_NOTE_1": "補足",
-  "KPI_LABEL_2": "効果指標2の名称", "KPI_VALUE_2": "数値のみ", "KPI_UNIT_2": "単位", "KPI_NOTE_2": "補足",
-  "KPI_LABEL_3": "効果指標3の名称", "KPI_VALUE_3": "数値のみ", "KPI_UNIT_3": "単位", "KPI_NOTE_3": "補足",
-  "STEP_1_TITLE": "導入ステップ1のタイトル", "STEP_1_DESC": "ステップ1の内容",
-  "STEP_2_TITLE": "導入ステップ2のタイトル", "STEP_2_DESC": "ステップ2の内容",
-  "STEP_3_TITLE": "導入ステップ3のタイトル", "STEP_3_DESC": "ステップ3の内容",
-  "STEP_4_TITLE": "導入ステップ4のタイトル", "STEP_4_DESC": "ステップ4の内容",
-  "ITEM_1": "見積り項目1", "DESC_1": "項目1の説明",
-  "ITEM_2": "見積り項目2", "DESC_2": "項目2の説明",
-  "ITEM_3": "見積り項目3", "DESC_3": "項目3の説明",
-  "ITEM_4": "見積り項目4", "DESC_4": "項目4の説明",
-  "ACTION_1": "次のアクション1", "ACTION_2": "次のアクション2", "ACTION_3": "次のアクション3",
-  "PRICING_NOTE": "見積りに関する補足(1文)"
+  "PROPOSAL_TITLE": "提案タイトル。「〇〇のご提案」ではなく経営課題と解決後の姿が伝わる表現(20字以内)",
+  "PROPOSAL_SUBTITLE": "具体的な数字を含む価値提案(35字以内)",
+  "CHALLENGE_1": "課題1。「〇〇が課題です」ではなく「〇〇により△△という損失が発生」の形式(35字以内)",
+  "CHALLENGE_2": "課題2(35字以内)",
+  "CHALLENGE_3": "課題3(35字以内)",
+  "PROPOSAL_SUMMARY": "提案の本質的価値と期待成果、経営者視点(120字以内)",
+  "KEY_POINT_1": "競合との最大差別化ポイント。数字を含める(30字以内)",
+  "KEY_POINT_2": "定量的な導入効果・ROI(30字以内)",
+  "KEY_POINT_3": "リスク最小化・安心感の根拠(30字以内)",
+  "FEATURE_1": "機能1がもたらす業務変革効果(35字以内)",
+  "FEATURE_2": "機能2の業務変革効果(35字以内)",
+  "FEATURE_3": "機能3の業務変革効果(35字以内)",
+  "FEATURE_4": "機能4の業務変革効果(35字以内)",
+  "KPI_LABEL_1": "KPI指標名(15字以内)", "KPI_VALUE_1": "数値のみ(例: 42)", "KPI_UNIT_1": "単位(例: %削減、6字以内)", "KPI_NOTE_1": "試算根拠(45字以内)",
+  "KPI_LABEL_2": "KPI指標名(15字以内)", "KPI_VALUE_2": "数値のみ", "KPI_UNIT_2": "単位(6字以内)", "KPI_NOTE_2": "試算根拠(45字以内)",
+  "KPI_LABEL_3": "KPI指標名(15字以内)", "KPI_VALUE_3": "数値のみ", "KPI_UNIT_3": "単位(6字以内)", "KPI_NOTE_3": "試算根拠(45字以内)",
+  "STEP_1_TITLE": "導入ステップ1のフェーズ名(18字以内)", "STEP_1_DESC": "主要タスク・成果物(55字以内)",
+  "STEP_2_TITLE": "導入ステップ2のフェーズ名(18字以内)", "STEP_2_DESC": "主要タスク・成果物(55字以内)",
+  "STEP_3_TITLE": "導入ステップ3のフェーズ名(18字以内)", "STEP_3_DESC": "主要タスク・成果物(55字以内)",
+  "STEP_4_TITLE": "導入ステップ4のフェーズ名(18字以内)", "STEP_4_DESC": "主要タスク・成果物(55字以内)",
+  "ITEM_1": "見積り項目1(20字以内)", "DESC_1": "項目1の説明(25字以内)",
+  "ITEM_2": "見積り項目2(20字以内)", "DESC_2": "項目2の説明(25字以内)",
+  "ITEM_3": "見積り項目3(20字以内)", "DESC_3": "項目3の説明(25字以内)",
+  "ITEM_4": "見積り項目4(20字以内)", "DESC_4": "項目4の説明(25字以内)",
+  "ACTION_1": "次のアクション1。担当者・具体的行動・ゴールを含む(45字以内)",
+  "ACTION_2": "次のアクション2(45字以内)",
+  "ACTION_3": "次のアクション3(45字以内)",
+  "PRICING_NOTE": "価格の妥当性・含まれるサービス・保証内容(65字以内)"
 }`;
 
 function offsetPositions(startX: number, y: number, count: number, gap = 220): [number, number][] {
@@ -386,8 +396,12 @@ let fileId = null;
 if (uploadResult.entries && uploadResult.entries[0]) {
   fileId = uploadResult.entries[0].id;
 } else {
-  // 409 conflict (a file with this name already exists in the folder) — Box file IDs are 10+
-  // digit numbers, and appear nowhere else in the error payload, so this regex reliably extracts it.
+  // 409 conflict (a file with this name already exists in the folder). The generated filename
+  // now includes a seconds-granular timestamp (see pptx-template.ts), so this should only ever
+  // fire on a genuine double-submit rather than "same customer, same day" as before — falling
+  // back to whatever file already has this name is a reasonable last resort here, not a silent
+  // stale-content bug. Box file IDs are 10+ digit numbers, and appear nowhere else in the error
+  // payload, so this regex reliably extracts it.
   const errMsg = (uploadResult.error && uploadResult.error.message) || JSON.stringify(uploadResult);
   const m = errMsg.match(/[0-9]{10,}/);
   if (m) fileId = m[0];

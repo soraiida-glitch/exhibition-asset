@@ -146,3 +146,6 @@ vite.config.ts.timestamp-*
 app-ids.json
 types/generated/
 
+# source documents for scripts/sync-manuals-pinecone.ts (may contain internal/company text)
+scripts/_manuals/
+

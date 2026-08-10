@@ -35,8 +35,10 @@ const SUPABASE_TENANT_ID = 'exhibition-asset';
 const MANUAL_NAMESPACE = 'exhibition-manuals';
 
 const PLANNER_SYSTEM_PROMPT = `あなたはCRMチャットの検索プランナーです。ユーザーの発言と直近の会話履歴から、
-kintoneのレコード検索に使うキーワードを1つ抽出してください。会社名・案件名・人名などの
-固有名詞を優先します。固有名詞が見つからない場合は空文字を返してください。
+kintoneのレコード検索に使うキーワードを抽出してください。会社名・案件名・人名などの
+固有名詞を優先します。「桜商事と山田製作所とみらい建設工業を比較して」のように複数の
+固有名詞が含まれる場合は、見つかった分だけすべて配列に入れてください(最大3件)。
+固有名詞が見つからない場合は空配列を返してください。
 
 また、ユーザーの質問がkintone内のデータだけでは答えられない、リアルタイムの外部情報を
 必要とする場合は、Web検索が必要かどうかも判定してください。
@@ -44,7 +46,7 @@ kintoneのレコード検索に使うキーワードを1つ抽出してくださ
 競合情報、天気・法改正など時事情報、その他kintoneに存在しないリアルタイム情報全般。
 
 必ず次のJSON形式のみで回答してください(説明文は不要):
-{"searchTerm": "抽出したキーワード", "intent": "search" | "edit" | "chat", "needsWebSearch": true | false, "webQuery": "Web検索用の簡潔なクエリ(不要な場合は空文字)"}
+{"searchTerms": ["抽出したキーワード1", "抽出したキーワード2"], "intent": "search" | "edit" | "chat", "needsWebSearch": true | false, "webQuery": "Web検索用の簡潔なクエリ(不要な場合は空文字)"}
 
 - intent: レコードの検索・参照が必要なら "search"、既存レコードの編集や新規登録の依頼なら "edit"、
   それ以外の一般的な会話なら "chat"
@@ -57,6 +59,20 @@ const MAIN_SYSTEM_PROMPT = `あなたはkintone上のCRM「exhibition-asset」�
 exhibition_営業評価の直近の完了済み評価期間のランキング)と会話履歴を参考に、
 ユーザーの質問に日本語で簡潔に答えてください。「今日やることを教えて」のような質問には
 デイリーアドバイスのadvice_json(actions配列)を優先度順に整理して答えてください。
+dailyAdviceRecordsが空の場合(その日のCronがまだ実行されていない、生成前の時間帯など)は、
+「アドバイスがありません」で終わらせず、代わりにkintoneContext.myOpenDeals(質問者本人が
+担当している、成約・失注以外の案件をクロージング予定日が近い順に並べたもの)を使って、
+今日優先すべきと思われる案件をその場で提案してください。その際は「本日分の正式なアドバイスは
+まだ生成されていませんが、現在担当している案件から」のように、正式生成ではない即席の提案で
+あることを一言添えてください。myOpenDealsが空の場合は、必ず「現在担当している案件が無い」旨を
+正直に答えてください。この場合、kintoneContext.opportunityRecords等の無関係な(質問者本人の
+担当ではない)案件を代わりに紹介することは絶対にしないでください——それは他の担当者の案件を
+質問者自身のものとして誤って伝えることになります。
+
+ユーザーの発言が空文字・意味の無い文字列(単純な文字の繰り返しなど)・具体的な質問として
+成立していない場合は、kintoneContextにある何らかのデータ(営業ランキングなど)を無理に
+結びつけて答えようとしないでください。この場合は「どのようなご質問でしょうか?」のように
+聞き返してください。
 「一番評価の高い社員は?」「営業ランキングを教えて」のような質問には、
 kintoneContext.salesScoreRecordsを使って答えてください(total_score降順で並んでいるため、
 先頭が最も評価の高い担当者です。assignee_nameとtotal_score、score_rankを含めて答えること)。
@@ -70,11 +86,17 @@ salesScoreRecordsは評価スコア・ランクの情報であり、案件の件
 kintoneContext.opportunityByOwner(担当者ごとの実際の案件件数の集計、[{owner, count}]の配列)
 を使って答えてください。
 
+「成約した案件は何件?」「失注は何件?」「提案中の案件はいくつ?」のようなフェーズ(stage)別の
+件数を聞く質問には、必ずkintoneContext.opportunityByStage([{stage, count}]の配列)を使って
+答えてください。opportunityTotalCount(下記)はフェーズ名では絞り込めません——フェーズ名を
+検索キーワードとして案件名/取引先名/担当者名に対して文字列検索してしまい、無関係な件数に
+なるため、フェーズ別の件数には絶対に使わないでください。
+
 件数を聞く質問には必ずkintoneContext.leadTotalCount/opportunityTotalCount/accountTotalCount
-を使って答えてください。これらは「リードは何件ある?」のような全体件数だけでなく、
-「(担当者名)が担当している案件はいくつ?」のように絞り込み条件付きの件数を聞かれた場合も
-同様に対象です(絞り込みは検索結果の取得時に既に適用済みなので、対応するTotalCountの値が
-その絞り込み後の正しい件数です)。
+を使って答えてください。これらは「リードは何件ある?」のような全体件数、および
+「(担当者名)が担当している案件はいくつ?」のように担当者名・会社名・案件名で絞り込んだ件数
+(絞り込みは検索結果の取得時に既に適用済み)が対象です。フェーズ別の件数には使わないこと
+(上記のopportunityByStageを使ってください)。
 kintoneContext.leadRecords/opportunityRecords/accountRecordsの配列は表示用のサンプルで
 最大5件しか入っていません。これらの配列の要素数(.length)を件数として数えたり報告したり
 することは絶対にしないでください——実際の件数と食い違います。件数の回答には必ず
@@ -128,7 +150,10 @@ prefillのキーは必ず以下のフィールドコード(英数字)を使っ�
   回答本文でどの案件か確認する質問をしてください(誤った案件のスライドを生成しないこと)。
 - 上記以外の質問には action を null にしてください。
 - リード(exhibition_リード)の編集・登録フォームは未対応です。リードについては検索結果を
-  回答本文で説明するのみにしてください。`;
+  回答本文で説明するのみにしてください。
+- レコードの削除機能(個別・一括のいずれも)は一切サポートしていません。削除を依頼された場合は
+  対応できない旨を伝えてください。「個別になら削除できます」のような、実際には存在しない
+  操作が可能であるかのような表現は絶対にしないでください。`;
 
 function offsetPositions(startX: number, y: number, count: number, gap = 220): [number, number][] {
   return Array.from({ length: count }, (_, i) => [startX + i * gap, y]);
@@ -310,8 +335,28 @@ let plan;
 try {
   plan = JSON.parse($json.choices[0].message.content);
 } catch (e) {
-  plan = { searchTerm: original.message || '', intent: 'chat', needsWebSearch: false, webQuery: '' };
+  plan = { searchTerms: original.message ? [original.message] : [], intent: 'chat', needsWebSearch: false, webQuery: '' };
 }
+
+const terms = (Array.isArray(plan.searchTerms) ? plan.searchTerms : []).filter(Boolean).slice(0, 3);
+const esc = (s) => String(s).replace(/"/g, '');
+// Builds the actual kintone query string here (once, in code) instead of duplicating this
+// escaping/OR-ing logic inline in 3 separate HTTP node expressions. A multi-entity question
+// ("桜商事と山田製作所とみらい建設工業を比較して") previously only ever searched the FIRST
+// extracted term — the other companies' deals were silently never fetched, and the AI then
+// wrongly concluded they "don't exist in the data". Each term now gets its own OR'd clause
+// across the relevant fields, and the sample size scales with the number of terms so multiple
+// companies' deals aren't squeezed out of the same fixed 5-record cap.
+function buildQuery(fields, limit) {
+  if (!terms.length) return 'limit ' + limit;
+  const clauses = terms.map((t) => '(' + fields.map((f) => f + ' like "' + esc(t) + '"').join(' or ') + ')');
+  return clauses.join(' or ') + ' limit ' + limit;
+}
+const sampleLimit = terms.length > 1 ? Math.min(5 * terms.length, 30) : 5;
+plan.accountQuery = buildQuery(['company_name', 'contact_name'], sampleLimit);
+plan.opportunityQuery = buildQuery(['deal_name', 'account', 'owner'], sampleLimit);
+plan.leadQuery = buildQuery(['lead_name', 'company_name'], sampleLimit);
+
 return [{ json: { ...original, plan } }];
 `.trim(),
       },
@@ -331,11 +376,7 @@ return [{ json: { ...original, plan } }];
         queryParameters: {
           parameters: [
             { name: 'app', value: String(config.accountAppId) },
-            {
-              name: 'query',
-              value:
-                '={{ $json.plan.searchTerm ? ("company_name like \\"" + $json.plan.searchTerm.replace(/"/g, "") + "\\" or contact_name like \\"" + $json.plan.searchTerm.replace(/"/g, "") + "\\" limit 5") : "limit 5" }}',
-            },
+            { name: 'query', value: '={{ $json.plan.accountQuery }}' },
             // limit 5 above keeps the AI's context small, but that means the AI never sees the
             // true record count — without this it will answer "何件?" questions with the sample
             // size (5) instead of the real total. totalCount:true asks kintone to also return the
@@ -361,15 +402,11 @@ return [{ json: { ...original, plan } }];
         queryParameters: {
           parameters: [
             { name: 'app', value: String(config.opportunityAppId) },
-            {
-              name: 'query',
-              // owner is included alongside deal_name/account so that "飯田が担当している案件は
-              // いくつ?"-style questions (searchTerm = a person's name) actually filter by the
-              // assignee, instead of only matching deal/company names and silently falling through
-              // to an unfiltered "limit 5" that made every such question answer with the sample size.
-              value:
-                '={{ $node["Parse Query Plan"].json.plan.searchTerm ? ("deal_name like \\"" + $node["Parse Query Plan"].json.plan.searchTerm.replace(/"/g, "") + "\\" or account like \\"" + $node["Parse Query Plan"].json.plan.searchTerm.replace(/"/g, "") + "\\" or owner like \\"" + $node["Parse Query Plan"].json.plan.searchTerm.replace(/"/g, "") + "\\" limit 5") : "limit 5" }}',
-            },
+            // owner is included alongside deal_name/account so that "飯田が担当している案件は
+            // いくつ?"-style questions (a person's name) actually filter by the assignee, instead
+            // of only matching deal/company names and silently falling through to an unfiltered
+            // "limit 5" that made every such question answer with the sample size.
+            { name: 'query', value: '={{ $node["Parse Query Plan"].json.plan.opportunityQuery }}' },
             { name: 'totalCount', value: 'true' },
           ],
         },
@@ -391,11 +428,7 @@ return [{ json: { ...original, plan } }];
         queryParameters: {
           parameters: [
             { name: 'app', value: String(config.leadAppId) },
-            {
-              name: 'query',
-              value:
-                '={{ $node["Parse Query Plan"].json.plan.searchTerm ? ("lead_name like \\"" + $node["Parse Query Plan"].json.plan.searchTerm.replace(/"/g, "") + "\\" or company_name like \\"" + $node["Parse Query Plan"].json.plan.searchTerm.replace(/"/g, "") + "\\" limit 5") : "limit 5" }}',
-            },
+            { name: 'query', value: '={{ $node["Parse Query Plan"].json.plan.leadQuery }}' },
             { name: 'totalCount', value: 'true' },
           ],
         },
@@ -610,16 +643,48 @@ const manualContext = manualMatches.length
   ? manualMatches.map((m) => "【" + (m.metadata && m.metadata.fileName || "社内マニュアル") + "】\\n" + (m.metadata && m.metadata.text || "")).join("\\n\\n")
   : "";
 const ownerCounts = {};
-for (const r of ($node["Search Opportunity Owners"].json.records || [])) {
+const stageCounts = {};
+const allOpportunities = $node["Search Opportunity Owners"].json.records || [];
+for (const r of allOpportunities) {
   const owner = (r.owner && r.owner.value) || "(未設定)";
   ownerCounts[owner] = (ownerCounts[owner] || 0) + 1;
+  const stage = (r.stage && r.stage.value) || "(未設定)";
+  stageCounts[stage] = (stageCounts[stage] || 0) + 1;
 }
 const opportunityByOwner = Object.entries(ownerCounts).map(([owner, count]) => ({ owner, count }));
+// Fallback source for "今日やること" when the day's DailyAdvice hasn't been generated yet (the
+// Cron only runs once a day — anyone asking before it fires that day gets an empty
+// dailyAdviceRecords otherwise, with no path to a useful answer at all). Reuses the same
+// full-record fetch above rather than a new query.
+const userCode = original.userCode || "";
+const CLOSED_STAGES = ["成約", "失注"];
+const myOpenDeals = allOpportunities
+  .filter((r) => (r.owner && r.owner.value) === userCode && !CLOSED_STAGES.includes((r.stage && r.stage.value) || ""))
+  .sort((a, b) => String((a.close_date && a.close_date.value) || "9999").localeCompare(String((b.close_date && b.close_date.value) || "9999")))
+  .slice(0, 5)
+  .map((r) => ({
+    dealName: (r.deal_name && r.deal_name.value) || "",
+    account: (r.account && r.account.value) || "",
+    stage: (r.stage && r.stage.value) || "",
+    closeDate: (r.close_date && r.close_date.value) || "",
+  }));
+// Same full-record fetch as opportunityByOwner above (not a separate query) — "成約は何件?"
+// style questions were being answered from the keyword-filtered 5-record sample's totalCount,
+// which reflects a deal_name/account/owner text match against the stage NAME, not an actual
+// stage filter, so it returned nonsense counts (e.g. "1件" when the real count was 3).
+const opportunityByStage = Object.entries(stageCounts).map(([stage, count]) => ({ stage, count }));
+const dailyAdviceRecords = $node["Search Daily Advice"].json.records || [];
 return [{ json: {
   ...original,
   correctionContext,
   webSearchContext,
   manualContext,
+  // The Main AI was repeatedly asked (via prompt instructions alone) to admit when a user has
+  // neither a formal daily advice nor any open deals of their own, rather than borrowing another
+  // assignee's deals from opportunityRecords — it kept doing so anyway across two rounds of
+  // prompt strengthening. Format Response deterministically overrides the answer in this exact
+  // case instead of continuing to rely on prompt compliance for a correctness-critical path.
+  noDataForToday: dailyAdviceRecords.length === 0 && myOpenDeals.length === 0,
   kintoneContext: {
     accountRecords: ($node["Search Account"].json.records || []),
     accountTotalCount: Number($node["Search Account"].json.totalCount || 0),
@@ -627,9 +692,11 @@ return [{ json: {
     opportunityTotalCount: Number($node["Search Opportunity"].json.totalCount || 0),
     leadRecords: ($node["Search Lead"].json.records || []),
     leadTotalCount: Number($node["Search Lead"].json.totalCount || 0),
-    dailyAdviceRecords: ($node["Search Daily Advice"].json.records || []),
+    dailyAdviceRecords,
     salesScoreRecords: ($node["Search Sales Score"].json.records || []),
     opportunityByOwner,
+    opportunityByStage,
+    myOpenDeals,
   },
 } }];
 `.trim(),
@@ -672,6 +739,15 @@ try {
 if (parsed.action && ALLOWED_ACTIONS.indexOf(parsed.action) === -1) {
   delete parsed.action;
   delete parsed.prefill;
+}
+const TODAY_TASK_KEYWORDS = /今日|本日|やること|タスク|優先/;
+if (original.noDataForToday && TODAY_TASK_KEYWORDS.test(original.message || "")) {
+  parsed = {
+    answer: "本日分のアドバイスはまだ生成されておらず、現在担当している案件もないため、ご提案できる内容がありません。",
+    referencedRecords: [],
+    action: null,
+    prefill: {},
+  };
 }
 return [{ json: {
   response: parsed,

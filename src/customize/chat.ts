@@ -270,6 +270,7 @@ a.exh-pill:hover { background: rgba(0,152,187,.26); text-decoration: underline; 
 .exh-daily-advice-item label { cursor: pointer; display: flex; align-items: flex-start; gap: 6px; }
 .exh-daily-advice-item.exh-daily-advice-done { color: #93a3ac; text-decoration: line-through; }
 .exh-daily-advice-related { color: #7a8a94; font-size: 11px; }
+.exh-daily-advice-fallback-note { color: #7a8a94; font-size: 11px; margin-bottom: 6px; font-style: italic; }
 .exh-daily-advice-error { color: #d33; font-size: 11px; padding-bottom: 6px; }
 .exh-status-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px;
   border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
@@ -888,22 +889,50 @@ async function loadDailyAdvice(): Promise<void> {
     };
 
     const record = result.records[0];
-    if (!record?.advice_json || !record.$id) {
-      bodyEl.textContent = '本日のアドバイスはまだありません。';
+    const parsed = record?.advice_json ? (JSON.parse(record.advice_json.value) as { actions?: DailyAdviceAction[] }) : null;
+    const actions = parsed?.actions || [];
+    if (!record?.$id || !actions.length) {
+      // The Cron that generates this only runs once a day — anyone checking before it fires that
+      // day would otherwise see a dead-end "no advice" message even though the chat agent (which
+      // has its own live fallback for the same gap, see agent-workflow.ts's myOpenDeals) can still
+      // answer "今日やること" questions. Mirror that fallback here so the two surfaces agree.
       currentDailyAdvice = null;
-      return;
-    }
-
-    const parsed = JSON.parse(record.advice_json.value) as { actions?: DailyAdviceAction[] };
-    const actions = parsed.actions || [];
-    if (!actions.length) {
-      bodyEl.textContent = '本日のアドバイスはまだありません。';
-      currentDailyAdvice = null;
+      await renderOpenDealsFallback(bodyEl, user.code);
       return;
     }
 
     currentDailyAdvice = { recordId: record.$id.value, parsed: { ...parsed, actions } };
     renderDailyAdvice(bodyEl);
+  } catch (err) {
+    bodyEl.textContent = '読み込みに失敗しました: ' + formatApiError(err);
+  }
+}
+
+const CLOSED_STAGES = ['成約', '失注'];
+
+async function renderOpenDealsFallback(bodyEl: HTMLElement, userCode: string): Promise<void> {
+  try {
+    const stageList = CLOSED_STAGES.map((s) => `"${s}"`).join(', ');
+    const query = `owner = "${userCode.replace(/"/g, '')}" and stage not in (${stageList}) order by close_date asc limit 5`;
+    const result = (await kintone.api('/k/v1/records', 'GET', {
+      app: Number(CONFIG.opportunityAppId),
+      query,
+    })) as { records: Array<{ deal_name?: { value?: string }; account?: { value?: string }; close_date?: { value?: string } }> };
+
+    if (!result.records.length) {
+      bodyEl.textContent = '本日のアドバイスはまだ生成されていません。現在担当している案件もありません。';
+      return;
+    }
+
+    bodyEl.innerHTML =
+      '<div class="exh-daily-advice-fallback-note">本日分の正式なアドバイスはまだ生成されていませんが、現在担当している案件から:</div>' +
+      result.records
+        .map((r) => {
+          const account = r.account?.value ? ` <span class="exh-daily-advice-related">(${escHtml(r.account.value)})</span>` : '';
+          const closeDate = r.close_date?.value ? ` — ${escHtml(r.close_date.value)}` : '';
+          return `<div class="exh-daily-advice-item">🔹 ${escHtml(r.deal_name?.value ?? '')}${account}${closeDate}</div>`;
+        })
+        .join('');
   } catch (err) {
     bodyEl.textContent = '読み込みに失敗しました: ' + formatApiError(err);
   }
