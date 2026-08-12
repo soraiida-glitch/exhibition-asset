@@ -480,9 +480,13 @@ return [{ json: { ...original, plan } }];
           parameters: [
             { name: 'app', value: String(config.dailyAdviceAppId) },
             {
+              // +9h before slicing so this matches the JST calendar date daily-advice-workflow.ts
+              // actually writes advice_date as (see that file's comment on the same fix) — without
+              // it, this query used UTC's date and never found the record the 7:00 JST Cron had
+              // just created that morning.
               name: 'query',
               value:
-                '={{ "advice_date = \\"" + new Date().toISOString().slice(0, 10) + "\\" and assignee_code = \\"" + ($node["Parse Query Plan"].json.userCode || "").replace(/"/g, "") + "\\" limit 1" }}',
+                '={{ "advice_date = \\"" + new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10) + "\\" and assignee_code = \\"" + ($node["Parse Query Plan"].json.userCode || "").replace(/"/g, "") + "\\" limit 1" }}',
             },
           ],
         },
@@ -748,6 +752,15 @@ if (original.noDataForToday && TODAY_TASK_KEYWORDS.test(original.message || ""))
     action: null,
     prefill: {},
   };
+}
+// An empty/whitespace-only message asked the model to answer *something* anyway a second time
+// (first found and "fixed" via a prompt-only instruction earlier — it held up in isolated
+// testing but stopped holding once the daily-advice fallback instructions were added later,
+// since the model treated any input with no company/deal to key off of as an implicit "today's
+// tasks" question when that data happened to be sitting right there in context). Emptiness is
+// trivial to check deterministically, so this no longer depends on the model noticing on its own.
+if (!(original.message || "").trim()) {
+  parsed = { answer: "どのようなご質問でしょうか?", referencedRecords: [], action: null, prefill: {} };
 }
 return [{ json: {
   response: parsed,

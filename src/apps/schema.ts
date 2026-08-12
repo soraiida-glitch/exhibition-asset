@@ -117,41 +117,9 @@ export const LEAD_FIELDS: KintoneFieldProperties = {
   },
 };
 
-/** exhibition_秘書AI会話ログ — audit/history log for the AI agent; the chat UI responds synchronously and does not poll this app. */
-export const CONVERSATION_LOG_FIELDS: KintoneFieldProperties = {
-  session_id: {
-    type: 'SINGLE_LINE_TEXT',
-    code: 'session_id',
-    label: 'セッションID',
-  },
-  user_name: {
-    type: 'SINGLE_LINE_TEXT',
-    code: 'user_name',
-    label: 'ユーザー名',
-  },
-  message: {
-    type: 'MULTI_LINE_TEXT',
-    code: 'message',
-    label: 'メッセージ',
-  },
-  ai_answer: {
-    type: 'MULTI_LINE_TEXT',
-    code: 'ai_answer',
-    label: 'AI応答',
-  },
-  status: {
-    type: 'DROP_DOWN',
-    code: 'status',
-    label: 'ステータス',
-    options: dropdownOptions(['完了', 'エラー']),
-    defaultValue: '完了',
-  },
-  error_message: {
-    type: 'MULTI_LINE_TEXT',
-    code: 'error_message',
-    label: 'エラーメッセージ',
-  },
-};
+// exhibition_秘書AI会話ログ (the AI agent's audit/history log) was deleted in Phase 7 — conversation
+// logging and feedback learning moved to Supabase (see src/workflows/agent-workflow.ts). Kept out
+// of this file entirely now so nothing re-references or recreates that app.
 
 /**
  * exhibition_案件 (Opportunity). Needs the already-*deployed* (live) 取引先 app id,

@@ -5,7 +5,6 @@ import { KintoneAdminClient } from '../lib/kintone-client';
 import {
   ACCOUNT_FIELDS,
   ASSIGNEE_FIELDS,
-  CONVERSATION_LOG_FIELDS,
   DAILY_ADVICE_FIELDS,
   LEAD_FIELDS,
   MEETING_LOG_FIELDS,
@@ -77,21 +76,14 @@ async function main() {
     },
   });
 
-  console.log('4/6 Creating exhibition_秘書AI会話ログ ...');
-  const conversationLogAppId = await kintone.createAndDeployApp(
-    'exhibition_秘書AI会話ログ',
-    CONVERSATION_LOG_FIELDS,
-  );
-  console.log(`   -> live app id ${conversationLogAppId}`);
-
-  console.log('5/6 Creating exhibition_デイリーアドバイス ...');
+  console.log('4/8 Creating exhibition_デイリーアドバイス ...');
   const dailyAdviceAppId = await kintone.createAndDeployApp(
     'exhibition_デイリーアドバイス',
     DAILY_ADVICE_FIELDS,
   );
   console.log(`   -> live app id ${dailyAdviceAppId}`);
 
-  console.log('6/9 Creating exhibition_ロールプレイセッション ...');
+  console.log('5/8 Creating exhibition_ロールプレイセッション ...');
   const roleplaySessionAppId = await kintone.createAndDeployApp(
     'exhibition_ロールプレイセッション',
     ROLEPLAY_SESSION_FIELDS,
@@ -125,18 +117,18 @@ async function main() {
     },
   });
 
-  console.log('7/9 Creating exhibition_商談ログ ...');
+  console.log('6/8 Creating exhibition_商談ログ ...');
   const meetingLogAppId = await kintone.createAndDeployApp(
     'exhibition_商談ログ',
     MEETING_LOG_FIELDS,
   );
   console.log(`   -> live app id ${meetingLogAppId}`);
 
-  console.log('8/9 Creating exhibition_担当者 ...');
+  console.log('7/8 Creating exhibition_担当者 ...');
   const assigneeAppId = await kintone.createAndDeployApp('exhibition_担当者', ASSIGNEE_FIELDS);
   console.log(`   -> live app id ${assigneeAppId}`);
 
-  console.log('9/9 Creating exhibition_営業評価 ...');
+  console.log('8/8 Creating exhibition_営業評価 ...');
   const salesScoreAppId = await kintone.createAndDeployApp(
     'exhibition_営業評価',
     SALES_SCORE_FIELDS,
@@ -147,7 +139,6 @@ async function main() {
     account: accountAppId,
     opportunity: opportunityAppId,
     lead: leadAppId,
-    conversationLog: conversationLogAppId,
     dailyAdvice: dailyAdviceAppId,
     roleplaySession: roleplaySessionAppId,
     meetingLog: meetingLogAppId,
@@ -161,7 +152,6 @@ async function main() {
     KINTONE_APP_ID_ACCOUNT: String(accountAppId),
     KINTONE_APP_ID_OPPORTUNITY: String(opportunityAppId),
     KINTONE_APP_ID_LEAD: String(leadAppId),
-    KINTONE_APP_ID_CONVERSATION_LOG: String(conversationLogAppId),
     KINTONE_APP_ID_DAILY_ADVICE: String(dailyAdviceAppId),
     KINTONE_APP_ID_ROLEPLAY_SESSION: String(roleplaySessionAppId),
     KINTONE_APP_ID_MEETING_LOG: String(meetingLogAppId),
@@ -174,11 +164,10 @@ async function main() {
 ========================================================================
 次の手動ステップ（kintone REST APIでは自動化できません）:
 
-kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の9アプリで実行:
+kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を、以下の8アプリで実行:
   - exhibition_取引先              (app id ${accountAppId})
   - exhibition_案件                (app id ${opportunityAppId})
   - exhibition_リード              (app id ${leadAppId})
-  - exhibition_秘書AI会話ログ       (app id ${conversationLogAppId})
   - exhibition_デイリーアドバイス    (app id ${dailyAdviceAppId})
   - exhibition_ロールプレイセッション (app id ${roleplaySessionAppId})
   - exhibition_商談ログ            (app id ${meetingLogAppId})
@@ -191,7 +180,6 @@ kintone管理画面 → 各アプリの設定 → APIトークン → 追加 を
   KINTONE_API_TOKEN_ACCOUNT=...
   KINTONE_API_TOKEN_OPPORTUNITY=...
   KINTONE_API_TOKEN_LEAD=...
-  KINTONE_API_TOKEN_CONVERSATION_LOG=...
   KINTONE_API_TOKEN_DAILY_ADVICE=...
   KINTONE_API_TOKEN_ROLEPLAY_SESSION=...
   KINTONE_API_TOKEN_MEETING_LOG=...

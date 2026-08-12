@@ -794,24 +794,50 @@ async function handleSend(text: string): Promise<void> {
   }
 }
 
-function injectClosingAdviceButton(): void {
-  if (document.getElementById('exh-closing-advice-btn')) return;
-
+// Called with the record straight from the detail.show event (kintone.app.record.get() is
+// disallowed while a record-show event handler is still processing — see record-summary.ts for
+// the same lesson). Previously the panel only ever showed advice right after a fresh generation
+// click and reset to hidden on every page load/record switch — the JSON already persisted in
+// closing_advice was never rendered again, so revisiting a record only showed kintone's own raw
+// JSON text display for that field. This now renders the saved advice automatically whenever
+// there is one.
+function injectClosingAdviceButton(eventRecord: unknown): void {
   const space = kintone.app.record.getHeaderMenuSpaceElement();
   if (!space) return;
 
-  const btn = document.createElement('button');
-  btn.id = 'exh-closing-advice-btn';
-  btn.className = 'exh-closing-advice-btn';
-  btn.textContent = '🔍 クロージングアドバイスを生成';
-  space.appendChild(btn);
+  let btn = document.getElementById('exh-closing-advice-btn') as HTMLButtonElement | null;
+  let panel = document.getElementById('exh-closing-advice-panel');
 
-  const panel = document.createElement('div');
-  panel.id = 'exh-closing-advice-panel';
-  panel.className = 'exh-closing-advice-panel exh-hidden';
-  space.appendChild(panel);
+  if (!btn || !panel) {
+    btn = document.createElement('button');
+    btn.id = 'exh-closing-advice-btn';
+    btn.className = 'exh-closing-advice-btn';
+    btn.textContent = '🔍 クロージングアドバイスを生成';
+    space.appendChild(btn);
 
-  btn.addEventListener('click', () => void generateClosingAdvice(panel));
+    panel = document.createElement('div');
+    panel.id = 'exh-closing-advice-panel';
+    panel.className = 'exh-closing-advice-panel exh-hidden';
+    space.appendChild(panel);
+
+    const clickPanel = panel;
+    btn.addEventListener('click', () => void generateClosingAdvice(clickPanel));
+  }
+
+  const record = (eventRecord || {}) as { closing_advice?: { value?: string } };
+  const savedRaw = record.closing_advice?.value;
+  if (savedRaw) {
+    try {
+      renderClosingAdvice(panel, JSON.parse(savedRaw) as ClosingAdvice);
+      panel.classList.remove('exh-hidden');
+    } catch {
+      panel.classList.add('exh-hidden');
+      panel.innerHTML = '';
+    }
+  } else {
+    panel.classList.add('exh-hidden');
+    panel.innerHTML = '';
+  }
 }
 
 async function generateClosingAdvice(panel: HTMLElement): Promise<void> {
@@ -881,7 +907,11 @@ async function loadDailyAdvice(): Promise<void> {
 
   try {
     const user = kintone.getLoginUser();
-    const today = new Date().toISOString().slice(0, 10);
+    // +9h before slicing so this matches the JST calendar date the Cron writes advice_date as
+    // (see daily-advice-workflow.ts's comment on the same fix) — without it, a visitor checking
+    // before ~9am JST would see UTC's still-yesterday date and never find the record the 7:00 JST
+    // Cron had just created that morning.
+    const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const appId = Number(CONFIG.dailyAdviceAppId);
     const query = `advice_date = "${today}" and assignee_code = "${user.code.replace(/"/g, '')}" limit 1`;
     const result = (await kintone.api('/k/v1/records', 'GET', { app: appId, query })) as {
@@ -1011,6 +1041,9 @@ export const STATUS_PILL_CLASS: Record<string, string> = {
   見込み: 'exh-pill-neutral',
   未対応: 'exh-pill-neutral',
   未生成: 'exh-pill-neutral',
+  ポジティブ: 'exh-pill-positive',
+  ネガティブ: 'exh-pill-negative',
+  ニュートラル: 'exh-pill-neutral',
 };
 
 const PILL_FIELD_CODES = ['stage', 'status', 'proposal_status'];
@@ -1093,7 +1126,7 @@ kintone.events.on(EVENTS, (event) => {
   if (appId === CONFIG.opportunityAppId && event.type === 'app.record.detail.show') {
     // Each wrapped independently: one throwing must not stop the rest from running (an earlier
     // version had initRecordSummary silently never execute if something ahead of it threw).
-    for (const fn of [injectClosingAdviceButton, () => initRoleplay(appId), () => initMeetingLog(appId), () => initProposal(appId), () => initRecordSummary(appId, (event as { record?: unknown }).record)]) {
+    for (const fn of [() => injectClosingAdviceButton((event as { record?: unknown }).record), () => initRoleplay(appId), () => initMeetingLog(appId), () => initProposal(appId), () => initRecordSummary(appId, (event as { record?: unknown }).record)]) {
       try {
         fn();
       } catch (err) {

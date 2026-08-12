@@ -218,12 +218,15 @@ const contextText = [
 
 const d = new Date();
 const today = d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
-const todayIso = d.toISOString().slice(0, 10);
+// +9h before slicing so this is JST's calendar date, not UTC's (same fix as daily-advice-workflow.ts
+// and agent-workflow.ts) — 'today' above already gets this right for free since getFullYear/
+// getMonth/getDate read local time, but toISOString() always reports UTC.
+const todayIso = new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 function addMonths(base, m) {
   const dd = new Date(base);
   dd.setMonth(dd.getMonth() + m);
-  return dd.toISOString().slice(0, 7);
+  return new Date(dd.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 7);
 }
 
 // Mechanical placeholders computed deterministically (kept out of the AI prompt so pricing

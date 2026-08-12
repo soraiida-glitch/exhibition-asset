@@ -211,7 +211,11 @@ try {
 } catch (e) {
   parsed = { context_summary: '', actions: [] };
 }
-const today = new Date().toISOString().slice(0, 10);
+// +9h before slicing so this is JST's calendar date, not UTC's. The Cron fires at 7:00 JST, which
+// is still the *previous* day in UTC (JST = UTC+9, no DST) — without this shift, toISOString()
+// alone wrote advice_date as yesterday every single time, so a same-day query for "today's advice"
+// (chat and the space-portal card) never found the record the Cron had just created that morning.
+const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 return { json: {
   owner,
   today,

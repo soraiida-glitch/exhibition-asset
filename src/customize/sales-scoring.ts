@@ -65,11 +65,18 @@ function injectSalesScoringStyles(): void {
   document.head.appendChild(style);
 }
 
+// +9h before slicing so the date reflects JST (this demo's actual timezone), not UTC — JST has no
+// DST, so a fixed offset is exact, unlike toISOString() alone which reports the UTC calendar date
+// (e.g. a JST browser at 07:00 already local-morning would otherwise still show yesterday's date).
+function jstDateString(d: Date): string {
+  return new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 function defaultPeriod(): { start: string; end: string } {
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - 6);
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+  return { start: jstDateString(start), end: jstDateString(end) };
 }
 
 const MEDALS = ['🥇', '🥈', '🥉'];

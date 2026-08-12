@@ -1,4 +1,4 @@
-import { escHtml, formatApiError } from './chat';
+import { STATUS_PILL_CLASS, escHtml, formatApiError } from './chat';
 import { THEME } from './theme';
 
 interface MeetingLogRecord {
@@ -9,6 +9,11 @@ interface MeetingLogRecord {
   sentiment_label?: { value?: string };
   keywords?: { value?: string };
   topics?: { value?: string };
+}
+
+interface MeetingLogHistoryRecord extends MeetingLogRecord {
+  $id?: { value?: string };
+  recorded_at?: { value?: string };
 }
 
 const ML_CONFIG = {
@@ -38,6 +43,21 @@ function injectMeetingLogStyles(): void {
 .exh-ml-panel.exh-hidden { display: none; }
 .exh-ml-section { margin-top: 8px; }
 .exh-ml-section ul { margin: 4px 0 0; padding-left: 18px; }
+.exh-ml-history { margin-top: 10px; max-width: 520px; }
+.exh-ml-history-title { font-size: 12px; font-weight: 700; color: #4a6472; margin-bottom: 6px; }
+.exh-ml-history-item { padding: 10px 12px; border: 1px solid ${t.mistLine}; border-radius: 10px;
+  background: #fff; font-size: 12px; margin-bottom: 8px; }
+.exh-ml-history-item-head { display: flex; justify-content: space-between; align-items: center;
+  color: #7a8a94; margin-bottom: 6px; font-size: 11px; }
+.exh-ml-history-label { font-size: 10px; font-weight: 700; color: #8a97a0; letter-spacing: .03em;
+  margin: 8px 0 3px; text-transform: uppercase; }
+.exh-ml-history-label:first-of-type { margin-top: 0; }
+.exh-ml-history-summary { color: #14233a; line-height: 1.6; }
+.exh-ml-history-item ul { margin: 2px 0 0; padding-left: 16px; line-height: 1.6; }
+.exh-ml-history-keywords { display: flex; flex-wrap: wrap; gap: 5px; }
+.exh-ml-history-tag { background: ${t.mist}; color: #5a6b7a; border-radius: 999px; padding: 2px 9px;
+  font-size: 10.5px; }
+.exh-ml-history-empty { font-size: 12px; color: #7a8a94; }
 `;
   document.head.appendChild(style);
 }
@@ -62,6 +82,76 @@ async function uploadAudioFile(file: File): Promise<string> {
   }
   const json = (await res.json()) as { fileKey: string };
   return json.fileKey;
+}
+
+function renderHistoryItem(r: MeetingLogHistoryRecord): string {
+  const recordedAt = r.recorded_at?.value
+    ? new Date(r.recorded_at.value).toLocaleString('ja-JP', { dateStyle: 'medium', timeStyle: 'short' })
+    : '';
+  const sentimentLabel = r.sentiment_label?.value;
+  const sentimentPill = sentimentLabel
+    ? `<span class="exh-status-pill ${STATUS_PILL_CLASS[sentimentLabel] || 'exh-pill-neutral'}">${escHtml(sentimentLabel)}${
+        r.sentiment_score?.value ? ` (${escHtml(r.sentiment_score.value)})` : ''
+      }</span>`
+    : '';
+
+  if (r.status?.value === '処理中') {
+    return `<div class="exh-ml-history-item">
+      <div class="exh-ml-history-item-head"><span>${escHtml(recordedAt)}</span><span>分析中...</span></div>
+    </div>`;
+  }
+  if (r.status?.value === 'エラー') {
+    return `<div class="exh-ml-history-item">
+      <div class="exh-ml-history-item-head"><span>${escHtml(recordedAt)}</span><span class="exh-status-pill exh-pill-negative">分析エラー</span></div>
+    </div>`;
+  }
+
+  const actions = (r.next_actions?.value || '')
+    .split('\n')
+    .filter(Boolean)
+    .map((s) => `<li>${escHtml(s)}</li>`)
+    .join('');
+  const keywords = (r.keywords?.value || '')
+    .split('\n')
+    .filter(Boolean)
+    .map((k) => `<span class="exh-ml-history-tag">${escHtml(k)}</span>`)
+    .join('');
+
+  return `<div class="exh-ml-history-item">
+    <div class="exh-ml-history-item-head"><span>${escHtml(recordedAt)}</span>${sentimentPill}</div>
+    <div class="exh-ml-history-label">要約</div>
+    <div class="exh-ml-history-summary">${escHtml(r.summary?.value ?? '')}</div>
+    ${actions ? `<div class="exh-ml-history-label">📌 ネクストアクション</div><ul>${actions}</ul>` : ''}
+    ${keywords ? `<div class="exh-ml-history-label">🔑 キーワード</div><div class="exh-ml-history-keywords">${keywords}</div>` : ''}
+  </div>`;
+}
+
+// The upload/analyze panel above is fire-and-forget: it only shows content right after a fresh
+// upload completes, and reverts to hidden on the next page load. Nothing anywhere else lets a
+// user see a deal's past meeting-log entries, even though they persist in exhibition_商談ログ
+// (linked via its deal_record_id field) — a native kintone "関連レコード一覧" field can't express
+// this link because deal_record_id is SINGLE_LINE_TEXT while the opportunity app's record number
+// is RECORD_NUMBER (kintone rejects that type pairing with CB_VA01), so this renders the history
+// itself instead.
+async function loadMeetingLogHistory(container: HTMLElement): Promise<void> {
+  const recordId = String(kintone.app.record.getId() || '');
+  if (!recordId) return;
+
+  try {
+    const result = (await kintone.api('/k/v1/records', 'GET', {
+      app: Number(ML_CONFIG.meetingLogAppId),
+      query: `deal_record_id = "${recordId.replace(/"/g, '')}" order by recorded_at desc limit 5`,
+    })) as { records: MeetingLogHistoryRecord[] };
+
+    if (!result.records.length) {
+      container.innerHTML = '<div class="exh-ml-history-empty">この案件の商談ログはまだありません。</div>';
+      return;
+    }
+
+    container.innerHTML = result.records.map(renderHistoryItem).join('');
+  } catch (err) {
+    container.innerHTML = `<div class="exh-ml-history-empty">読み込みに失敗しました: ${escHtml(formatApiError(err))}</div>`;
+  }
 }
 
 function renderResult(panel: HTMLElement, record: MeetingLogRecord): void {
@@ -147,32 +237,50 @@ async function handleAudioUpload(file: File, panel: HTMLElement): Promise<void> 
 export function initMeetingLog(appId: string): void {
   if (appId !== ML_CONFIG.opportunityAppId) return;
   injectMeetingLogStyles();
-  if (document.getElementById('exh-ml-btn')) return;
 
   const space = kintone.app.record.getHeaderMenuSpaceElement();
   if (!space) return;
 
-  const btn = document.createElement('button');
-  btn.id = 'exh-ml-btn';
-  btn.className = 'exh-ml-btn';
-  btn.textContent = '🎙️ 商談録音を分析';
-  space.appendChild(btn);
+  // The button/upload-input/result-panel aren't record-specific at creation time (their click
+  // handler reads kintone.app.record.getId() fresh, at click time), so they're safe to create
+  // once and skip on repeat calls.
+  if (!document.getElementById('exh-ml-btn')) {
+    const btn = document.createElement('button');
+    btn.id = 'exh-ml-btn';
+    btn.className = 'exh-ml-btn';
+    btn.textContent = '🎙️ 商談録音を分析';
+    space.appendChild(btn);
 
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = 'audio/*';
-  fileInput.style.display = 'none';
-  space.appendChild(fileInput);
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'audio/*';
+    fileInput.style.display = 'none';
+    space.appendChild(fileInput);
 
-  const panel = document.createElement('div');
-  panel.id = 'exh-ml-panel';
-  panel.className = 'exh-ml-panel exh-hidden';
-  space.appendChild(panel);
+    const panel = document.createElement('div');
+    panel.id = 'exh-ml-panel';
+    panel.className = 'exh-ml-panel exh-hidden';
+    space.appendChild(panel);
 
-  btn.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', () => {
-    const file = fileInput.files?.[0];
-    fileInput.value = '';
-    if (file) void handleAudioUpload(file, panel);
-  });
+    btn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = '';
+      if (file) void handleAudioUpload(file, panel);
+    });
+  }
+
+  // Always rebuilt, unlike the elements above: this shows THIS record's own history, and kintone's
+  // detail view can navigate between records (prev/next arrows) without a full page reload, which
+  // would otherwise leave it frozen on whichever record was viewed first (see record-summary.ts's
+  // fix for the same lesson learned the hard way).
+  document.getElementById('exh-ml-history')?.remove();
+  const history = document.createElement('div');
+  history.id = 'exh-ml-history';
+  history.className = 'exh-ml-history';
+  history.innerHTML =
+    '<div class="exh-ml-history-title">📋 商談ログ履歴</div><div id="exh-ml-history-body">読み込み中...</div>';
+  space.appendChild(history);
+  const historyBody = history.querySelector<HTMLElement>('#exh-ml-history-body');
+  if (historyBody) void loadMeetingLogHistory(historyBody);
 }
