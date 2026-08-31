@@ -17,7 +17,7 @@ function injectSpaceDashboardStyles(): void {
    floating fixed to the viewport, so its contents scroll away with the page instead of staying
    pinned on screen and overlapping the announcements area above them. */
 #exh-space-widget-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 32px; margin: 16px 16px 0;
-  font-family: ${THEME.font}; }
+  max-width: 100%; box-sizing: border-box; font-family: ${THEME.font}; }
 `;
   document.head.appendChild(style);
 }

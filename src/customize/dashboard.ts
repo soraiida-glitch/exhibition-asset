@@ -53,9 +53,12 @@ function injectBiDashboardStyles(): void {
   style.textContent = `
 /* 横に空いているスペースを活かすため、縦1列積みではなく3列グリッドで並べる
    (ユーザーフィードバック: 「空いているスペースを有効活用したい」)。 */
-#exh-bi-dashboard { flex: 0 0 auto; width: min(900px, 100%); background: #fff; border-radius: 14px;
-  box-shadow: 0 12px 32px -16px rgba(20,40,60,.35); border: 1px solid ${THEME.mistLine}; padding: 16px; font-size: 13px;
-  font-family: ${THEME.font}; }
+/* box-sizing: border-box にしないと、width指定にpadding/borderの分(実測34px)が上乗せされて
+   実際の描画幅がわずかにはみ出す——「アプリ」「ピープル」パネルとほんの少し重なって見える
+   というユーザー報告の原因だった。 */
+#exh-bi-dashboard { box-sizing: border-box; flex: 0 0 auto; width: min(860px, 100%); background: #fff;
+  border-radius: 14px; box-shadow: 0 12px 32px -16px rgba(20,40,60,.35); border: 1px solid ${THEME.mistLine};
+  padding: 16px; font-size: 13px; font-family: ${THEME.font}; }
 .exh-bi-dashboard-title { font-weight: 800; font-size: 15px; margin-bottom: 10px; color: ${THEME.soraDeep}; }
 .exh-bi-dashboard-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 /* 幅が狭い画面(モバイル等)では列数を落として潰れないようにする。 */
