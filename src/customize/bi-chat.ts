@@ -24,6 +24,11 @@ function injectBiChatStyles(): void {
 .exh-bi-panel { margin-top: 10px; }
 .exh-bi-chart-host { width: 100%; height: 220px; }
 .exh-bi-chart-host.exh-bi-chart-tall { height: 260px; }
+/* T5(クロス集計)は業種等の多いカテゴリ軸を持ち、チャットパネルのような狭い横幅では
+   軸ラベル・visualMap凡例が重なって崩れる(実際に「汚いグラフ」として報告された)。
+   最低幅を確保しつつ、収まらない分は横スクロールさせる(ダッシュボードの広いカードでは
+   最低幅を十分上回るため、スクロールは発生せずそのまま全幅で表示される)。 */
+.exh-bi-heatmap-scroll { width: 100%; overflow-x: auto; }
 .exh-bi-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .exh-bi-action-btn { border: 1px solid ${THEME.mistLine}; background: #fff; color: ${THEME.soraDeep};
   font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; cursor: pointer; }
@@ -55,7 +60,19 @@ export function renderBiChart(container: HTMLElement, biResult: BiResult): () =>
 
   const chartHost = document.createElement('div');
   chartHost.className = 'exh-bi-chart-host';
-  container.appendChild(chartHost);
+
+  // T5だけは横スクロール可能なラッパーの中に置く(狭いチャットパネルでも軸ラベル・凡例が
+  // 崩れないよう最低幅を確保するため)。他のテンプレはcontainer直下でよい。
+  if (biResult.template === 'T5') {
+    const scrollWrap = document.createElement('div');
+    scrollWrap.className = 'exh-bi-heatmap-scroll';
+    container.appendChild(scrollWrap);
+    chartHost.classList.add('exh-bi-chart-tall');
+    chartHost.style.minWidth = '560px';
+    scrollWrap.appendChild(chartHost);
+  } else {
+    container.appendChild(chartHost);
+  }
 
   let dispose: (() => void) | undefined;
   switch (biResult.template) {
@@ -74,7 +91,6 @@ export function renderBiChart(container: HTMLElement, biResult: BiResult): () =>
       dispose = renderFunnel(chartHost, biResult.data as PayloadFor<'T4'>);
       break;
     case 'T5':
-      chartHost.classList.add('exh-bi-chart-tall');
       dispose = renderHeatmap(chartHost, biResult.data as PayloadFor<'T5'>);
       break;
     case 'T8':
