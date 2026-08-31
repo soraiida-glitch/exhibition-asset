@@ -53,6 +53,7 @@ const DIMENSION_FIELD_MAP: Record<string, { field: string; targetApp: 'opportuni
   industry: { field: 'industry', targetApp: 'opportunity' },
   loss_reason: { field: 'loss_reason', targetApp: 'opportunity' },
   account: { field: 'account', targetApp: 'opportunity' },
+  proposal_status: { field: 'proposal_status', targetApp: 'opportunity' },
   lead_source: { field: 'source', targetApp: 'lead' },
   lead_status: { field: 'status', targetApp: 'lead' },
 };
@@ -73,6 +74,7 @@ const DIMENSION_LABELS: Record<string, string> = {
   industry: '業種',
   loss_reason: '失注理由',
   account: '取引先',
+  proposal_status: '提案書ステータス',
   lead_source: '流入経路',
   lead_status: 'リードステータス',
 };

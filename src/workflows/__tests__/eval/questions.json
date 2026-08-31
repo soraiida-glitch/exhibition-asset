@@ -94,5 +94,9 @@
   {
     "question": "今日の天気は?",
     "expected": { "template": null, "needClarify": false }
+  },
+  {
+    "question": "提案書ステータス別の案件数を見せて",
+    "expected": { "template": "T2", "metric": "count", "dimension": "proposal_status" }
   }
 ]

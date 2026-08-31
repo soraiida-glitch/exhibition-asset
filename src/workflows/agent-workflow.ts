@@ -5,6 +5,7 @@ import {
   LEAD_STATUS_OPTIONS,
   LOSS_REASON_OPTIONS,
   OPPORTUNITY_STAGE_OPTIONS,
+  PROPOSAL_STATUS_OPTIONS,
 } from '../apps/schema';
 import { aggregateEmbeddable } from '../semantic/aggregate';
 import { cardsEmbeddable } from '../semantic/cards';
@@ -192,6 +193,7 @@ export const BI_ROUTER_SYSTEM_PROMPT = `あなたはCRMチャットの「分析(
 - loss_reason(失注理由、案件のフィールド、選択肢: ${LOSS_REASON_OPTIONS.join(' / ')} —
   stage=失注でない案件には意味を持たない次元です)
 - account(取引先、案件のフィールド、自由入力)
+- proposal_status(提案書ステータス、案件のフィールド、選択肢: ${PROPOSAL_STATUS_OPTIONS.join(' / ')})
 - lead_source(流入経路、リードのフィールド、選択肢: ${LEAD_SOURCE_OPTIONS.join(' / ')})
 - lead_status(リードステータス、リードのフィールド、選択肢: ${LEAD_STATUS_OPTIONS.join(' / ')})
 
@@ -437,6 +439,188 @@ return [{ json: { ...$input.item.json, valid: provided === expected } }];
         responseBody: '={{ JSON.stringify({ success: true }) }}',
       },
     },
+    // ---- RELVA BI 追加要件定義書 §7 — ピン留めカードの永続化サブグラフ開始 ----
+    // Feedback Check?(=='__feedback__') と全く同じパターン: message の特殊値で分岐する。
+    // ダッシュボード(dashboard.ts)からのピン留め一覧取得も同じチャットwebhookを再利用する
+    // (別webhookを新設せず、既存の秘密検証・呼び出し経路をそのまま使う)。
+    {
+      id: 'is_pin_action_if',
+      name: 'Is Pin Action?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextPos(),
+      parameters: {
+        conditions: {
+          string: [{ value1: '={{$json.body.message}}', value2: '__pin_card__' }],
+        },
+      },
+    },
+    {
+      id: 'build_pin_record',
+      name: 'Build Pin Record',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextPos(),
+      parameters: {
+        jsCode: `
+const body = $json.body || {};
+const card = body.cardSpec || {};
+// cards.ts の generateCardId() と同じ形式(自己完結ファイルではないここでは直接生成する)。
+const id = "card_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+return [{ json: {
+  id,
+  template: card.template || "",
+  params: card.params || {},
+  title: card.title || "",
+  pinned_by_name: body.userName || "",
+  // dataset_cache.sort_order は integer(pinned_cardsテーブルのSQL)のため、Date.now()の
+  // ミリ秒値そのままだとint4の範囲(約21億)を超えてエラーになる——秒単位に落とす
+  // (2038年問題と同じ限界だが、このアプリの現実的な運用期間では十分)。
+  sort_order: Math.floor(Date.now() / 1000),
+} }];
+`.trim(),
+      },
+    },
+    {
+      id: 'write_pinned_card',
+      name: 'Write Pinned Card',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextPos(),
+      parameters: {
+        method: 'POST',
+        url: `${config.supabaseUrl}/rest/v1/pinned_cards`,
+        sendHeaders: true,
+        headerParameters: {
+          parameters: [...supabaseHeaders(), { name: 'Prefer', value: 'return=representation' }],
+        },
+        sendBody: true,
+        specifyBody: 'json',
+        jsonBody: '={{ JSON.stringify([$json]) }}',
+        options: {},
+      },
+    },
+    {
+      id: 'respond_pin_ack',
+      name: 'Respond Pin Ack',
+      type: 'n8n-nodes-base.respondToWebhook',
+      typeVersion: 1.1,
+      position: nextPos(),
+      parameters: {
+        respondWith: 'json',
+        // insert対象は常に1件なので、n8nの配列分割後もアイテムは1件のまま
+        // ($jsonが直接その1行のオブジェクトになる)。
+        responseBody: '={{ JSON.stringify({ success: true, card: $json }) }}',
+      },
+    },
+    {
+      id: 'is_unpin_action_if',
+      name: 'Is Unpin Action?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextPos(),
+      parameters: {
+        conditions: {
+          string: [{ value1: '={{$json.body.message}}', value2: '__unpin_card__' }],
+        },
+      },
+    },
+    {
+      id: 'delete_pinned_card',
+      name: 'Delete Pinned Card',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextPos(),
+      onError: 'continueRegularOutput',
+      alwaysOutputData: true,
+      parameters: {
+        method: 'DELETE',
+        url: `${config.supabaseUrl}/rest/v1/pinned_cards`,
+        sendHeaders: true,
+        headerParameters: {
+          parameters: [...supabaseHeaders(), { name: 'Prefer', value: 'return=minimal' }],
+        },
+        sendQuery: true,
+        queryParameters: {
+          parameters: [{ name: 'id', value: '={{ "eq." + $json.body.cardId }}' }],
+        },
+        options: {},
+      },
+    },
+    {
+      id: 'respond_unpin_ack',
+      name: 'Respond Unpin Ack',
+      type: 'n8n-nodes-base.respondToWebhook',
+      typeVersion: 1.1,
+      position: nextPos(),
+      parameters: {
+        respondWith: 'json',
+        responseBody: '={{ JSON.stringify({ success: true }) }}',
+      },
+    },
+    {
+      id: 'is_list_pinned_action_if',
+      name: 'Is List Pinned Action?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextPos(),
+      parameters: {
+        conditions: {
+          string: [{ value1: '={{$json.body.message}}', value2: '__list_pinned_cards__' }],
+        },
+      },
+    },
+    {
+      id: 'fetch_pinned_cards',
+      name: 'Fetch Pinned Cards',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextPos(),
+      onError: 'continueRegularOutput',
+      alwaysOutputData: true,
+      parameters: {
+        method: 'GET',
+        url: `${config.supabaseUrl}/rest/v1/pinned_cards`,
+        sendHeaders: true,
+        headerParameters: { parameters: supabaseHeaders() },
+        sendQuery: true,
+        queryParameters: {
+          parameters: [
+            { name: 'select', value: 'id,template,params,title,pinned_by_name,sort_order' },
+            { name: 'order', value: 'sort_order.asc' },
+          ],
+        },
+        options: {},
+      },
+    },
+    {
+      id: 'collect_pinned_cards',
+      name: 'Collect Pinned Cards',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextPos(),
+      parameters: {
+        // Check Dataset Cache と全く同じ理由(n8nはPostgRESTの配列レスポンスを1件ずつ別
+        // アイテムに分割する)。alwaysOutputDataは0件ヒット時にも空オブジェクトのプレース
+        // ホルダーを1件強制的に流すため、idを持たない行は実データではないとして除外する
+        // (これが無いと「ピン留めが1枚もない」状態が実際には[{}]という1件の空カードに
+        // 化けてダッシュボードに描画されてしまう)。
+        mode: 'runOnceForAllItems',
+        jsCode: 'return [{ json: { cards: $input.all().map((item) => item.json).filter((row) => row && row.id) } }];',
+      },
+    },
+    {
+      id: 'respond_pinned_cards',
+      name: 'Respond Pinned Cards',
+      type: 'n8n-nodes-base.respondToWebhook',
+      typeVersion: 1.1,
+      position: nextPos(),
+      parameters: {
+        respondWith: 'json',
+        responseBody: '={{ JSON.stringify({ success: true, cards: $json.cards }) }}',
+      },
+    },
+    // ---- ピン留めカードサブグラフここまで ----
     // ---- RELVA BI (要件定義書 §5) サブグラフ開始 ----
     // Feedback Check? の false 分岐から Query Planner へ向かう手前で分岐する。BI質問でなければ
     // Is BI Question? の false 分岐からそのまま既存の Query Planner に合流し、以降の一般チャット
@@ -478,6 +662,7 @@ const DIMENSION_FIELD_MAP = {
   industry: { field: "industry", targetApp: "opportunity" },
   loss_reason: { field: "loss_reason", targetApp: "opportunity" },
   account: { field: "account", targetApp: "opportunity" },
+  proposal_status: { field: "proposal_status", targetApp: "opportunity" },
   lead_source: { field: "source", targetApp: "lead" },
   lead_status: { field: "status", targetApp: "lead" },
 };
@@ -751,9 +936,12 @@ return [{ json: { ...original, biResult, factSheet } }];
         // 挙動)。そのため後続のDataset Cache Hit?で$json.lengthを見ても常に単一行オブジェクト
         // (配列ではない)しか見えず、キャッシュが実際にヒットしていても誤ってミス判定される
         // ——ここで元の配列に戻し、1回だけ判定できるようにする(n8nのCode nodeはjsonの値が
-        // 直接配列だと拒否するため、{rows: [...]}のように1段オブジェクトで包む)。
+        // 直接配列だと拒否するため、{rows: [...]}のように1段オブジェクトで包む)。alwaysOutputData
+        // が0件ヒット時に強制的に流す空オブジェクトのプレースホルダーは、cache_keyを持たない
+        // ため除外する(無くても2件ちょうどの判定は壊れないが、Collect Pinned Cardsと同じ
+        // 防御をここにも一貫して入れておく)。
         mode: 'runOnceForAllItems',
-        jsCode: 'return [{ json: { rows: $input.all().map((item) => item.json) } }];',
+        jsCode: 'return [{ json: { rows: $input.all().map((item) => item.json).filter((row) => row && row.cache_key) } }];',
       },
     },
     {
@@ -1581,7 +1769,7 @@ return [{ json: {
     'Feedback Check?': {
       main: [
         [{ node: 'Negative Feedback?', type: 'main', index: 0 }],
-        [{ node: 'BI Router', type: 'main', index: 0 }],
+        [{ node: 'Is Pin Action?', type: 'main', index: 0 }],
       ],
     },
     'Negative Feedback?': {
@@ -1592,6 +1780,30 @@ return [{ json: {
     },
     'Embed Feedback Question': { main: [[{ node: 'Save Feedback Embedding', type: 'main', index: 0 }]] },
     'Save Feedback Embedding': { main: [[{ node: 'Respond Feedback Ack', type: 'main', index: 0 }]] },
+    // ---- ピン留めカードサブグラフ(§7)。3つとも該当しなければBI Routerへフォールスルーする。----
+    'Is Pin Action?': {
+      main: [
+        [{ node: 'Build Pin Record', type: 'main', index: 0 }],
+        [{ node: 'Is Unpin Action?', type: 'main', index: 0 }],
+      ],
+    },
+    'Build Pin Record': { main: [[{ node: 'Write Pinned Card', type: 'main', index: 0 }]] },
+    'Write Pinned Card': { main: [[{ node: 'Respond Pin Ack', type: 'main', index: 0 }]] },
+    'Is Unpin Action?': {
+      main: [
+        [{ node: 'Delete Pinned Card', type: 'main', index: 0 }],
+        [{ node: 'Is List Pinned Action?', type: 'main', index: 0 }],
+      ],
+    },
+    'Delete Pinned Card': { main: [[{ node: 'Respond Unpin Ack', type: 'main', index: 0 }]] },
+    'Is List Pinned Action?': {
+      main: [
+        [{ node: 'Fetch Pinned Cards', type: 'main', index: 0 }],
+        [{ node: 'BI Router', type: 'main', index: 0 }],
+      ],
+    },
+    'Fetch Pinned Cards': { main: [[{ node: 'Collect Pinned Cards', type: 'main', index: 0 }]] },
+    'Collect Pinned Cards': { main: [[{ node: 'Respond Pinned Cards', type: 'main', index: 0 }]] },
     // ---- RELVA BI (要件定義書 §5) サブグラフ ----
     'BI Router': { main: [[{ node: 'Parse BI Plan', type: 'main', index: 0 }]] },
     'Parse BI Plan': { main: [[{ node: 'Is BI Question?', type: 'main', index: 0 }]] },

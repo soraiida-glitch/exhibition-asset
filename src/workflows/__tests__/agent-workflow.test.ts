@@ -358,6 +358,12 @@ describe('Collect Dataset Cache Rows node', () => {
     const out = runNode<{ rows: unknown[] }>(jsCode, { $input }).json;
     expect(out).toEqual({ rows: [] });
   });
+
+  it('filters out the placeholder empty item n8n forces through on a 0-row alwaysOutputData response (regression: this once made a real cache hit report length 1 instead of 0, still correctly a miss but for the wrong reason)', () => {
+    const $input = { all: () => [{ json: {} }] };
+    const out = runNode<{ rows: unknown[] }>(jsCode, { $input }).json;
+    expect(out).toEqual({ rows: [] });
+  });
 });
 
 describe('Use Cached Datasets node', () => {
@@ -512,5 +518,66 @@ describe('Format BI Response node', () => {
     const out = run({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, 'not json');
     expect(out.response.biResult.template).toBe('T2');
     expect(out.response.answer).toBe(biResult.interpretation);
+  });
+});
+
+// RELVA BI 追加要件定義書 §7 — ピン留めカードの永続化。カード=テンプレインスタンス統一
+// モデル(§2)どおり、永続化するのは template+params+title だけ(表示済みdataは保存しない
+// ——ダッシュボード表示時に毎回buildBiResultで新しく計算する。§3-3参照)。
+describe('Build Pin Record node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Build Pin Record');
+
+  it('builds a Supabase-insertable record from cardSpec, generating a fresh id', () => {
+    const cardSpec = {
+      template: 'T2',
+      params: { metric: 'amount_sum', dimension: 'owner', period: { preset: 'current_fiscal_year' } },
+      title: '担当者別 受注額',
+      interpretation: '...',
+      filtersApplied: [],
+      data: { series: [] },
+    };
+    const out = runNode<{ id: string; template: string; params: unknown; title: string; pinned_by_name: string }>(
+      jsCode,
+      { $json: { body: { message: '__pin_card__', cardSpec, userName: '飯田' } } },
+    ).json;
+    expect(out.template).toBe('T2');
+    expect(out.params).toEqual(cardSpec.params);
+    expect(out.title).toBe('担当者別 受注額');
+    expect(out.pinned_by_name).toBe('飯田');
+    expect(out.id).toMatch(/^card_/);
+    // dataは永続化しない(常に最新のkintoneレコードから再計算する)。
+    expect(out).not.toHaveProperty('data');
+    expect(out).not.toHaveProperty('interpretation');
+  });
+
+  it('regression: sort_order must fit Postgres integer (int4, max ~2.1e9) — Date.now() in ms overflows it', () => {
+    const cardSpec = { template: 'T1', params: {}, title: 't', interpretation: '', filtersApplied: [], data: {} };
+    const out = runNode<{ sort_order: number }>(jsCode, { $json: { body: { message: '__pin_card__', cardSpec } } }).json;
+    expect(out.sort_order).toBeLessThan(2_147_483_647);
+    expect(Number.isInteger(out.sort_order)).toBe(true);
+  });
+});
+
+describe('Collect Pinned Cards node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Collect Pinned Cards');
+
+  it('wraps all incoming pinned-card rows into a single { cards: [...] } item', () => {
+    const $input = { all: () => [{ json: { id: 'card_1', template: 'T2' } }, { json: { id: 'card_2', template: 'T4' } }] };
+    const out = runNode<{ cards: unknown[] }>(jsCode, { $input }).json;
+    expect(out).toEqual({ cards: [{ id: 'card_1', template: 'T2' }, { id: 'card_2', template: 'T4' }] });
+  });
+
+  it('produces an empty cards array when nothing is pinned yet', () => {
+    const $input = { all: () => [] };
+    const out = runNode<{ cards: unknown[] }>(jsCode, { $input }).json;
+    expect(out).toEqual({ cards: [] });
+  });
+
+  it('filters out the placeholder empty item n8n forces through on a 0-row alwaysOutputData response (regression: this once surfaced as a phantom 7th dashboard card with no template/params)', () => {
+    const $input = { all: () => [{ json: {} }] };
+    const out = runNode<{ cards: unknown[] }>(jsCode, { $input }).json;
+    expect(out).toEqual({ cards: [] });
   });
 });

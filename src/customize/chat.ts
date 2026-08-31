@@ -474,8 +474,14 @@ function pushAI(text: string, data?: AgentResponse, question?: string): string {
     const biContainer = document.createElement('div');
     el.appendChild(biContainer);
     // ドリルダウンボタンは自然文をそのまま送信するだけ(ユーザーが打って送ったのと同じ扱い)。
-    // handleSend は下で定義されているが、関数宣言は巻き上げられるためこの前方参照で問題ない。
-    renderBiResult(biContainer, data.biResult, (routerQuery) => void handleSend(routerQuery));
+    // handleSend/pinCard は下で定義されているが、関数宣言は巻き上げられるためこの前方参照で
+    // 問題ない。cardSpecが無い応答(一般チャット等)にはピンボタンを出さない。
+    renderBiResult(
+      biContainer,
+      data.biResult,
+      (routerQuery) => void handleSend(routerQuery),
+      data.cardSpec ? () => void pinCard(data.cardSpec!) : undefined,
+    );
   }
 
   // このメッセージがカードを1枚出したなら「直前のカード」を更新する。BIの質問ではない
@@ -765,6 +771,32 @@ async function handleMeishiUpload(file: File): Promise<void> {
   } catch (err) {
     loadingEl.remove();
     pushAI('名刺の解析に失敗しました: ' + formatApiError(err));
+  }
+}
+
+/**
+ * RELVA BI 追加要件定義書 §3/§7 — チャットの会話結果をダッシュボードのカードに変換する
+ * (「カード=テンプレインスタンス」統一モデルの、pinによる唯一の橋渡し)。永続化するのは
+ * template+params+titleだけで、表示済みのdataは送らない——ダッシュボード表示時に毎回
+ * buildBiResultで最新のkintoneデータから再計算する(§3-3)。
+ */
+async function pinCard(card: ChatCardState): Promise<void> {
+  const user = kintone.getLoginUser();
+  try {
+    await kintone.proxy(
+      CONFIG.webhookUrl,
+      'POST',
+      { 'Content-Type': 'application/json', 'x-webhook-secret': CONFIG.webhookSecret },
+      JSON.stringify({
+        message: '__pin_card__',
+        cardSpec: card,
+        sessionId: SESSION_ID,
+        userId: user.id,
+        userName: user.name,
+      }),
+    );
+  } catch (err) {
+    pushAI('ピン留めに失敗しました: ' + formatApiError(err));
   }
 }
 

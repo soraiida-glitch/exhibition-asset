@@ -4,6 +4,7 @@ import {
   LEAD_STATUS_OPTIONS,
   LOSS_REASON_OPTIONS,
   OPPORTUNITY_STAGE_OPTIONS,
+  PROPOSAL_STATUS_OPTIONS,
 } from '../apps/schema';
 
 /**
@@ -20,6 +21,7 @@ export type DimensionCode =
   | 'industry'
   | 'loss_reason'
   | 'account'
+  | 'proposal_status'
   | 'lead_source'
   | 'lead_status';
 
@@ -57,6 +59,13 @@ export const DIMENSIONS: Record<DimensionCode, DimensionDef> = {
     options: LOSS_REASON_OPTIONS,
   },
   account: { code: 'account', label: '取引先', field: 'account', targetApp: 'opportunity' },
+  proposal_status: {
+    code: 'proposal_status',
+    label: '提案書ステータス',
+    field: 'proposal_status',
+    targetApp: 'opportunity',
+    options: PROPOSAL_STATUS_OPTIONS,
+  },
   lead_source: {
     code: 'lead_source',
     label: '流入経路',

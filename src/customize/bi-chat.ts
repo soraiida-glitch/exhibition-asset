@@ -28,6 +28,11 @@ function injectBiChatStyles(): void {
 .exh-bi-action-btn { border: 1px solid ${THEME.mistLine}; background: #fff; color: ${THEME.soraDeep};
   font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; cursor: pointer; }
 .exh-bi-action-btn:hover { background: ${THEME.cloud}; }
+.exh-bi-pin-btn { border: 1px solid ${THEME.mistLine}; background: #fff; color: ${THEME.ink};
+  font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; cursor: pointer;
+  margin-top: 8px; display: inline-flex; align-items: center; gap: 4px; }
+.exh-bi-pin-btn:hover { background: ${THEME.cloud}; }
+.exh-bi-pin-btn.exh-bi-pinned { color: ${THEME.soraDeep}; border-color: ${THEME.sora}; background: ${THEME.cloud}; cursor: default; }
 `;
   document.head.appendChild(style);
 }
@@ -84,12 +89,16 @@ export function renderBiChart(container: HTMLElement, biResult: BiResult): () =>
   return () => dispose?.();
 }
 
-/** container に BiResult(チャート+ドリルダウン用のアクションボタン)を描画する。
- * 返り値の関数で(ECharts系のみ)後始末できる。 */
+/** container に BiResult(チャート+ドリルダウン用のアクションボタン+ピン留めボタン)を
+ * 描画する。返り値の関数で(ECharts系のみ)後始末できる。
+ * `onPin` は「📌 ダッシュボードにピン留め」ボタンのクリック時に呼ばれる(RELVA BI 追加要件
+ * 定義書 §3 — チャットの会話結果をダッシュボードのカードに変換する唯一の入口)。cardSpecが
+ * 無い応答(一般チャット等)にはピンボタンを出さないため省略可能。 */
 export function renderBiResult(
   container: HTMLElement,
   biResult: BiResult,
   onDrill: (routerQuery: string) => void,
+  onPin?: () => void,
 ): () => void {
   container.className = 'exh-bi-panel';
   container.innerHTML = '';
@@ -111,6 +120,20 @@ export function renderBiResult(
       actionsRow.appendChild(btn);
     }
     container.appendChild(actionsRow);
+  }
+
+  if (onPin) {
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.className = 'exh-bi-pin-btn';
+    pinBtn.textContent = '📌 ダッシュボードにピン留め';
+    pinBtn.addEventListener('click', () => {
+      pinBtn.disabled = true;
+      pinBtn.classList.add('exh-bi-pinned');
+      pinBtn.textContent = '📌 ピン留めしました';
+      onPin();
+    });
+    container.appendChild(pinBtn);
   }
 
   return dispose;
