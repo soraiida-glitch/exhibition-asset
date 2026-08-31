@@ -41,10 +41,20 @@ export async function runCustomizeSmokeTest(bundlePath: string): Promise<void> {
   // jsdom's canvas isn't installed (native dependency). ECharts' text-layout code (measureText)
   // expects a real-shaped TextMetrics back, not just "any callable" — a bare no-op stub throws
   // deep inside zrender's text measurement path, which isn't a real bug, just an under-stubbed
-  // canvas. Special-case measureText's return shape; every other 2D-context call is a safe no-op.
+  // canvas. Same story for gradients: zrender's internal painting (e.g. funnel/heatmap default
+  // visuals, first exercised once the BI dashboard started rendering all 5 chart types in one
+  // smoke-test pass) calls createLinearGradient(...).addColorStop(...) — a bare no-op stub
+  // returns undefined from createLinearGradient, and .addColorStop on undefined throws (again,
+  // not a real bug — real browsers implement this fine; only jsdom's canvas stub doesn't).
+  // Special-case both; every other 2D-context call is a safe no-op.
+  const fakeGradient = { addColorStop: () => undefined };
   (window.HTMLCanvasElement.prototype as unknown as { getContext: unknown }).getContext = () =>
     new Proxy(
-      { measureText: () => ({ width: 10 }) },
+      {
+        measureText: () => ({ width: 10 }),
+        createLinearGradient: () => fakeGradient,
+        createRadialGradient: () => fakeGradient,
+      },
       { get: (target, prop) => (prop in target ? (target as Record<string, unknown>)[String(prop)] : () => undefined) },
     );
 
@@ -76,6 +86,13 @@ export async function runCustomizeSmokeTest(bundlePath: string): Promise<void> {
   const dashboard = window.document.getElementById('exh-space-dashboard');
   if (!dashboard) {
     throw new Error('space.portal.show ran without throwing, but #exh-space-dashboard was never inserted into the DOM.');
+  }
+  // RELVA BI 追加要件定義書 §5 — 6枚の初期ダッシュボードも同じ space.portal.show で必ず
+  // 一緒にマウントされる。この1行が無いと、既存ダッシュボードだけが動いて新しい方が
+  // 静かに死んでいても(例: 循環import・チャート描画の例外)このスモークテストは気付けない。
+  const biDashboard = window.document.getElementById('exh-bi-dashboard');
+  if (!biDashboard) {
+    throw new Error('space.portal.show ran without throwing, but #exh-bi-dashboard was never inserted into the DOM.');
   }
 
   dom.window.close();

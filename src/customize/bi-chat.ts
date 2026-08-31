@@ -38,14 +38,14 @@ function pickT2Component(series: DimensionSeries[]): 'donut' | 'barH' {
   return series.length > 0 && series.length <= 6 ? 'donut' : 'barH';
 }
 
-/** container に BiResult を描画する。返り値の関数で(ECharts系のみ)後始末できる。 */
-export function renderBiResult(
-  container: HTMLElement,
-  biResult: BiResult,
-  onDrill: (routerQuery: string) => void,
-): () => void {
+/**
+ * container にチャートだけを描画する(アクション行は含まない)。テンプレ別のコンポーネント
+ * 選択ロジックをここに一本化し、チャット内表示(renderBiResult)とダッシュボード
+ * (src/customize/dashboard.ts)の両方がこの同じ関数を使う——チャートの出し分けが経路によって
+ * ズレないようにするため。返り値の関数で(ECharts系のみ)後始末できる。
+ */
+export function renderBiChart(container: HTMLElement, biResult: BiResult): () => void {
   injectBiChatStyles();
-  container.className = 'exh-bi-panel';
   container.innerHTML = '';
 
   const chartHost = document.createElement('div');
@@ -81,6 +81,23 @@ export function renderBiResult(
       chartHost.textContent = '';
   }
 
+  return () => dispose?.();
+}
+
+/** container に BiResult(チャート+ドリルダウン用のアクションボタン)を描画する。
+ * 返り値の関数で(ECharts系のみ)後始末できる。 */
+export function renderBiResult(
+  container: HTMLElement,
+  biResult: BiResult,
+  onDrill: (routerQuery: string) => void,
+): () => void {
+  container.className = 'exh-bi-panel';
+  container.innerHTML = '';
+
+  const chartHost = document.createElement('div');
+  container.appendChild(chartHost);
+  const dispose = renderBiChart(chartHost, biResult);
+
   if (biResult.actions?.length) {
     const actionsRow = document.createElement('div');
     actionsRow.className = 'exh-bi-actions';
@@ -96,5 +113,5 @@ export function renderBiResult(
     container.appendChild(actionsRow);
   }
 
-  return () => dispose?.();
+  return dispose;
 }

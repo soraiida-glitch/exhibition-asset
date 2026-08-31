@@ -771,117 +771,17 @@ const plan = original.biPlan;
 const opportunityRecords = $node["Fetch BI Opportunities"].json.records || [];
 const leadRecords = $node["Fetch BI Leads"].json.records || [];
 
-// DIMENSION_LABELS/METRIC_LABELS/METRIC_UNITS/buildFactSheet は aggregateEmbeddable() が
-// 既に宣言済み(上に埋め込み済み)なので、ここでは再宣言しない(再宣言すると SyntaxError になる)。
-const PERIOD_LABELS = { current_fiscal_year: "今期", current_month: "今月", last_month: "先月", all: "全期間" };
+// 期間解決(fiscal.ts)・集計(runAggregate)・interpretation/factSheetの組み立てまでを
+// buildBiResult()(aggregateEmbeddable経由で埋め込み済み)にまとめている——
+// src/customize/dashboard.ts(初期ダッシュボード)もこの同じ関数を直接importして使うため、
+// この経路と集計ロジック・表示フォーマットが分岐/重複することはない(§6-3)。
+const outcome = buildBiResult({ opportunityRecords, leadRecords }, plan, new Date(), resolvePeriodPreset);
 
-// period(相対的な期間表現)を実行時の「今日」で絶対的な close_date 範囲へ解決する。
-// ルーターLLMには日付計算をさせない(要件定義書 §1 の絶対原則)——ここはコード側で決定的に行う。
-function pad2(n) { return String(n).padStart(2, "0"); }
-function monthRange(year, month) {
-  const lastDay = new Date(year, month, 0).getDate();
-  return { start: year + "-" + pad2(month) + "-01", end: year + "-" + pad2(month) + "-" + pad2(lastDay) };
+if (!outcome.ok) {
+  return [{ json: { ...original, biAggregateError: outcome.message } }];
 }
 
-const today = new Date();
-let periodFilter = null;
-if (plan.period !== "all") {
-  let range;
-  if (plan.period === "current_month") {
-    range = monthRange(today.getFullYear(), today.getMonth() + 1);
-  } else if (plan.period === "last_month") {
-    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    range = monthRange(prev.getFullYear(), prev.getMonth() + 1);
-  } else {
-    range = currentFiscalYearRange(today);
-  }
-  periodFilter = { field: "close_date", op: "range", value: range };
-}
-
-const filters = (Array.isArray(plan.filters) ? plan.filters.slice() : []);
-if (periodFilter) filters.push(periodFilter);
-
-const result = runAggregate({ opportunityRecords, leadRecords }, {
-  template: plan.template,
-  metric: plan.metric,
-  dimension: plan.dimension,
-  dimensionB: plan.dimensionB,
-  filters,
-});
-
-if (!result.ok) {
-  return [{ json: { ...original, biAggregateError: result.message } }];
-}
-
-const filtersApplied = [];
-if (periodFilter) {
-  filtersApplied.push({
-    label: "期間",
-    value: (PERIOD_LABELS[plan.period] || plan.period) + "(" + periodFilter.value.start + "〜" + periodFilter.value.end + ")",
-  });
-}
-for (const f of (plan.filters || [])) {
-  filtersApplied.push({
-    label: DIMENSION_LABELS[f.field] || f.field,
-    value: Array.isArray(f.value) ? f.value.join("・") : String(f.value),
-  });
-}
-
-const interpretationFilterLabels = filtersApplied.map((f) => f.label + "=" + f.value);
-// T8(条件抽出リスト)はmetricを持たない(runAggregateもmetricを使わない)ため、
-// buildInterpretationの「metricを○○別に集計」という文言はそもそも当てはまらない——
-// 専用の文言にする(そうしないと「でnull集計しました」のような表示になる)。
-const interpretation =
-  plan.template === "T8"
-    ? (interpretationFilterLabels.length ? interpretationFilterLabels.join("・") + "で" : "") + "条件に合う案件を抽出しました。"
-    : buildInterpretation(plan.metric, plan.dimension, plan.dimensionB, interpretationFilterLabels);
-
-function toMetricView(code) { return { code: code, label: METRIC_LABELS[code] || code, unit: METRIC_UNITS[code] || "" }; }
-function toDimView(code) { return { code: code, label: DIMENSION_LABELS[code] || code }; }
-
-// computeMetric() の win_rate は 0〜1 の割合(0.4 = 40%)で返るが、unit は "%" として表示する
-// ため、表示用データに詰める直前にだけ 0〜100 のスケールへ直す(この関数は表示用の単位合わせ
-// のみを行い、値そのものの再計算はしない——集計値は runAggregate が既に確定させている)。
-function scaleForDisplay(metric, value) { return metric === "win_rate" ? value * 100 : value; }
-
-let title = plan.template === "T8" ? "条件に合う案件一覧" : METRIC_LABELS[plan.metric] || plan.metric;
-let data;
-if (plan.template === "T1") {
-  data = { value: scaleForDisplay(plan.metric, result.data.value), unit: METRIC_UNITS[plan.metric] || "" };
-} else if (plan.template === "T2") {
-  title = title + "(" + (DIMENSION_LABELS[plan.dimension] || plan.dimension) + "別)";
-  const series = result.data.series.map((s) => ({ key: s.key, value: scaleForDisplay(plan.metric, s.value) }));
-  data = { metric: toMetricView(plan.metric), dimension: toDimView(plan.dimension), series };
-} else if (plan.template === "T4") {
-  title = title + "(パイプライン)";
-  const steps = result.data.steps.map((s) => ({ stage: s.stage, value: scaleForDisplay(plan.metric, s.value) }));
-  data = { metric: toMetricView(plan.metric), steps };
-} else if (plan.template === "T5") {
-  title = (DIMENSION_LABELS[plan.dimension] || plan.dimension) + " × " + (DIMENSION_LABELS[plan.dimensionB] || plan.dimensionB);
-  const matrix = result.data.matrix.map((m) => ({ row: m.row, col: m.col, value: scaleForDisplay(plan.metric, m.value) }));
-  data = { metric: toMetricView(plan.metric), rows: toDimView(plan.dimension), cols: toDimView(plan.dimensionB), matrix };
-} else if (plan.template === "T8") {
-  title = "条件に合う案件一覧";
-  data = result.data;
-}
-
-// ナレーションLLMには生のbiResult(円単位の生数値など)をそのまま渡さない——万円換算や
-// パーセント表記をLLM自身に計算させると誤変換する(実際に「815万円」を「8,150万円」と
-// 一桁多く言う事故が本番で発生した)。buildFactSheet()(aggregateEmbeddable経由で埋め込み
-// 済み)が日本語の表示用文字列を決定的に整形し、LLMには「引用するだけ」の役目にする。
-// narrate(既存カードに話しかける)経路(Build Narrate Input ノード)も同じ関数を使う。
-const factSheet = buildFactSheet(plan.template, plan.metric, title, data);
-
-const biResult = {
-  template: plan.template,
-  title,
-  interpretation,
-  filtersApplied,
-  data,
-  narrative: "",
-};
-
-return [{ json: { ...original, biResult, factSheet } }];
+return [{ json: { ...original, biResult: outcome.biResult, factSheet: outcome.factSheet } }];
 `.trim(),
       },
     },

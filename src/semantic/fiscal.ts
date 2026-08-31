@@ -34,6 +34,36 @@ export function currentFiscalYearRange(
   return { start, end };
 }
 
+export type PeriodPreset = 'current_fiscal_year' | 'current_month' | 'last_month' | 'all';
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function monthRange(year: number, month: number): FiscalYearRange {
+  const lastDay = new Date(year, month, 0).getDate();
+  return { start: `${year}-${pad2(month)}-01`, end: `${year}-${pad2(month)}-${pad2(lastDay)}` };
+}
+
+/**
+ * period(相対的な期間表現)を、呼び出し時点の `today` を基準に絶対的な日付レンジへ解決する。
+ * "all" は null(期間による絞り込みなし)を返す。ルーターLLMには日付計算をさせない(RELVA BI
+ * 要件定義書 §1 の絶対原則)ための唯一の変換ポイント——n8n の Aggregate BI とダッシュボード
+ * (src/customize/dashboard.ts)の両方がこの1関数だけを呼び、独自に日付計算を重複実装しない。
+ */
+export function resolvePeriodPreset(preset: PeriodPreset, today: Date): FiscalYearRange | null {
+  if (preset === 'all') return null;
+  if (preset === 'current_month') return monthRange(today.getFullYear(), today.getMonth() + 1);
+  if (preset === 'last_month') {
+    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    return monthRange(prev.getFullYear(), prev.getMonth() + 1);
+  }
+  return currentFiscalYearRange(today);
+}
+
 export function fiscalEmbeddable(): string {
-  return `function __name(fn) { return fn; }\nconst DEFAULT_FISCAL_YEAR_START_MONTH = ${DEFAULT_FISCAL_YEAR_START_MONTH};\n${currentFiscalYearRange.toString()}`;
+  const shim = 'function __name(fn) { return fn; }';
+  const consts = [`const DEFAULT_FISCAL_YEAR_START_MONTH = ${DEFAULT_FISCAL_YEAR_START_MONTH};`];
+  const fns = [currentFiscalYearRange, pad2, monthRange, resolvePeriodPreset].map((fn) => fn.toString());
+  return [shim, ...consts, ...fns].join('\n');
 }

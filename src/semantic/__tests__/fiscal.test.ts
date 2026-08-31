@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { currentFiscalYearRange, fiscalEmbeddable, DEFAULT_FISCAL_YEAR_START_MONTH } from '../fiscal';
+import { currentFiscalYearRange, fiscalEmbeddable, resolvePeriodPreset, DEFAULT_FISCAL_YEAR_START_MONTH } from '../fiscal';
 
 describe('currentFiscalYearRange', () => {
   it('defaults to a April-start fiscal year (要件定義書 §12 未決事項②、確定)', () => {
@@ -44,5 +44,36 @@ describe('fiscalEmbeddable', () => {
 
     const today = new Date(2026, 7, 30);
     expect(isolatedFn(today)).toEqual(currentFiscalYearRange(today));
+  });
+
+  it('also exposes resolvePeriodPreset standalone (Aggregate BI/dashboard共通の期間解決)', () => {
+    const embeddable = fiscalEmbeddable();
+    const isolatedFn = new Function(`${embeddable}\nreturn resolvePeriodPreset(arguments[0], arguments[1]);`) as (
+      preset: string,
+      d: Date,
+    ) => ReturnType<typeof resolvePeriodPreset>;
+
+    const today = new Date(2026, 7, 30);
+    expect(isolatedFn('current_fiscal_year', today)).toEqual(resolvePeriodPreset('current_fiscal_year', today));
+  });
+});
+
+describe('resolvePeriodPreset (RELVA BI 追加要件定義書 §1: LLMに日付計算をさせない唯一の変換ポイント)', () => {
+  const today = new Date(2026, 7, 30); // 2026-08-30
+
+  it('resolves current_fiscal_year to the same range as currentFiscalYearRange', () => {
+    expect(resolvePeriodPreset('current_fiscal_year', today)).toEqual(currentFiscalYearRange(today));
+  });
+
+  it('resolves current_month to the calendar month containing today', () => {
+    expect(resolvePeriodPreset('current_month', today)).toEqual({ start: '2026-08-01', end: '2026-08-31' });
+  });
+
+  it('resolves last_month, correctly rolling back across a year boundary', () => {
+    expect(resolvePeriodPreset('last_month', new Date(2026, 0, 15))).toEqual({ start: '2025-12-01', end: '2025-12-31' });
+  });
+
+  it('resolves all to null (no date-range filter at all)', () => {
+    expect(resolvePeriodPreset('all', today)).toBeNull();
   });
 });

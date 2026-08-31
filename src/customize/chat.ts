@@ -13,6 +13,7 @@ import { escHtml } from './html-utils';
 // dev/playground からも読み込まれるため、chat.ts 経由ではなく html-utils.ts から直接 import する。
 export { escHtml };
 import { renderBiResult } from './bi-chat';
+import { initBiDashboard } from './dashboard';
 import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
 import { initLeadInsights } from './lead-insights';
 import { initMeetingLog } from './meeting-log';
@@ -810,6 +811,19 @@ async function handleSend(text: string): Promise<void> {
   }
 }
 
+/**
+ * RELVA BI 追加要件定義書 §3 — 「カード=ピン留めしたテンプレインスタンス」の橋渡し。
+ * ダッシュボード(src/customize/dashboard.ts)の各カードから「このグラフについて聞く」で
+ * チャットへ入り、そのカードについての narrate/refine をそのまま続けられるようにする——
+ * ダッシュボードとチャットで別々の集計・別々の状態管理を持たない。
+ */
+export function openChatWithBiQuestion(message: string, card: ChatCardState): void {
+  const panel = document.getElementById('exh-panel');
+  panel?.classList.remove('exh-hidden');
+  currentCard = card;
+  void handleSend(message);
+}
+
 // Called with the record straight from the detail.show event (kintone.app.record.get() is
 // disallowed while a record-show event handler is still processing — see record-summary.ts for
 // the same lesson). Previously the panel only ever showed advice right after a fresh generation
@@ -1122,6 +1136,10 @@ kintone.events.on(EVENTS, (event) => {
       // Order matters: getOrCreateSpaceWidgetRow() appends children in call order, and the
       // dashboard is meant to render to the left of the daily-advice card.
       initSpaceDashboard();
+      // RELVA BI 追加要件定義書 §5 — 6枚の初期ダッシュボード。既存のspace-dashboard(KPI/
+      // フェーズ別パイプライン/営業ランキング)とは別の並びのカードとして追加する
+      // (既に検証済みの既存表示に触れず、デグレさせないため)。
+      initBiDashboard();
       injectDailyAdviceCard();
     }
     return event;

@@ -7,6 +7,13 @@
  * `aggregateEmbeddable()` で n8n Code node にそのまま貼り付けて実行できる
  * (ダッシュボード側は通常の import で同じ関数を直接使う — 集計ロジックの二重管理をしない)。
  *
+ * `buildBiResult()` だけは期間プリセットの解決(fiscal.ts の `resolvePeriodPreset`)を必要と
+ * するが、これも実行時 import ではなく引数(`resolvePeriod`)として渡してもらう設計にして
+ * いる——`.toString()` で埋め込む都合上、関数本体が実際の import 文を含むと(バンドラでの
+ * 変換のされ方次第で)埋め込み文字列の中に解決できない参照が残ってしまうため。呼び出し側
+ * (agent-workflow.ts は fiscalEmbeddable() 経由、dashboard.ts は通常の import 経由)が
+ * 同じ `resolvePeriodPreset` を渡すことで、期間解決ロジック自体は重複させない。
+ *
  * LLM はこのファイルの一切を呼ばない・計算しない。ルーターLLMは metric/dimension/filters を
  * 選ぶだけ、ナレーションLLMはここで確定した数値を引用するだけ、という要件定義書の絶対原則を
  * 支える最下層。
@@ -14,6 +21,7 @@
 
 import type { DimensionCode } from './dimensions';
 import type { MetricCode } from './metrics';
+import type { PeriodPreset, FiscalYearRange } from './fiscal';
 import type { TemplateId } from './templates';
 
 export interface KintoneFieldValue {
@@ -410,6 +418,133 @@ export function buildFactSheet(template: string, metric: string | undefined, tit
   return '';
 }
 
+const PERIOD_LABELS: Record<PeriodPreset, string> = {
+  current_fiscal_year: '今期',
+  current_month: '今月',
+  last_month: '先月',
+  all: '全期間',
+};
+
+/** buildBiResult() が受け取る、意味論コードだけで表現された「何を集計するか」の指示。
+ * n8n の biPlan(query/refine/narrateいずれも同じ形)、ダッシュボードの CardSpec.params の
+ * どちらから来ても、この形に正規化してから渡す(period は文字列プリセットに揃える —
+ * TemplateParams.period の `{preset}` オブジェクト形はここでは受け取らない)。 */
+export interface BiPlanLike {
+  template: TemplateId;
+  metric?: MetricCode;
+  dimension?: DimensionCode;
+  dimensionB?: DimensionCode;
+  filters?: FilterSpec[];
+  period?: PeriodPreset;
+  entity?: 'opportunity' | 'lead';
+}
+
+export interface BuiltBiResult {
+  template: TemplateId;
+  title: string;
+  interpretation: string;
+  filtersApplied: { label: string; value: string }[];
+  data: Record<string, unknown>;
+  narrative: string;
+}
+
+export type BuildBiResultOutcome = { ok: true; biResult: BuiltBiResult; factSheet: string } | { ok: false; message: string };
+
+/**
+ * RELVA BI 追加要件定義書 — n8n の Aggregate BI ノードと src/customize/dashboard.ts(初期
+ * ダッシュボード)の両方から呼ばれる、唯一の「意味論コード → 表示確定済みBiResult」変換。
+ * period プリセットの絶対日付レンジへの解決(fiscal.ts)、runAggregate による集計、
+ * interpretation/factSheet の決定的な文字列組み立てまでを1関数にまとめ、経路によって集計
+ * ロジックや表示フォーマットが分岐・重複しないことを構造的に保証する(§6-3)。
+ */
+export function buildBiResult(
+  input: RunAggregateInput,
+  plan: BiPlanLike,
+  today: Date,
+  resolvePeriod: (preset: PeriodPreset, today: Date) => FiscalYearRange | null,
+): BuildBiResultOutcome {
+  const period = plan.period || 'current_fiscal_year';
+  const range = resolvePeriod(period, today);
+  const periodFilter: FilterSpec | null = range ? { field: 'close_date', op: 'range', value: range } : null;
+
+  const filters = plan.filters ? plan.filters.slice() : [];
+  if (periodFilter) filters.push(periodFilter);
+
+  const result = runAggregate(input, {
+    template: plan.template,
+    metric: plan.metric as MetricCode,
+    dimension: plan.dimension,
+    dimensionB: plan.dimensionB,
+    filters,
+    entity: plan.entity,
+  });
+
+  if (!result.ok) return { ok: false, message: result.message };
+
+  const filtersApplied: { label: string; value: string }[] = [];
+  if (periodFilter) {
+    const r = periodFilter.value as { start: string; end: string };
+    filtersApplied.push({ label: '期間', value: `${PERIOD_LABELS[period] || period}(${r.start}〜${r.end})` });
+  }
+  for (const f of plan.filters || []) {
+    filtersApplied.push({
+      label: DIMENSION_LABELS[f.field] || f.field,
+      value: Array.isArray(f.value) ? f.value.join('・') : String(f.value),
+    });
+  }
+
+  const interpretationFilterLabels = filtersApplied.map((f) => `${f.label}=${f.value}`);
+  // T8(条件抽出リスト)はmetricを持たない(runAggregateもmetricを使わない)ため、
+  // buildInterpretationの「metricを○○別に集計」という文言はそもそも当てはまらない。
+  const interpretation =
+    plan.template === 'T8'
+      ? (interpretationFilterLabels.length ? interpretationFilterLabels.join('・') + 'で' : '') + '条件に合う案件を抽出しました。'
+      : buildInterpretation(plan.metric || '', plan.dimension, plan.dimensionB, interpretationFilterLabels);
+
+  function toMetricView(code: string) {
+    return { code, label: METRIC_LABELS[code] || code, unit: METRIC_UNITS[code] || '' };
+  }
+  function toDimView(code: string) {
+    return { code, label: DIMENSION_LABELS[code] || code };
+  }
+  // computeMetric() の win_rate は 0〜1 の割合(0.4 = 40%)で返るが、unit は "%" として表示する
+  // ため、表示用データに詰める直前にだけ 0〜100 のスケールへ直す(値そのものの再計算はしない)。
+  function scaleForDisplay(metric: string | undefined, value: number) {
+    return metric === 'win_rate' ? value * 100 : value;
+  }
+
+  let title = plan.template === 'T8' ? '条件に合う案件一覧' : METRIC_LABELS[plan.metric || ''] || plan.metric || '';
+  let data: Record<string, unknown>;
+  if (plan.template === 'T1') {
+    data = { value: scaleForDisplay(plan.metric, (result.data as { value: number }).value), unit: METRIC_UNITS[plan.metric || ''] || '' };
+  } else if (plan.template === 'T2') {
+    title = title + `(${DIMENSION_LABELS[plan.dimension || ''] || plan.dimension}別)`;
+    const series = (result.data as { series: DimensionSeriesPoint[] }).series.map((s) => ({
+      key: s.key,
+      value: scaleForDisplay(plan.metric, s.value),
+    }));
+    data = { metric: toMetricView(plan.metric || ''), dimension: toDimView(plan.dimension || ''), series };
+  } else if (plan.template === 'T4') {
+    title = title + '(パイプライン)';
+    const steps = (result.data as { steps: FunnelStepPoint[] }).steps.map((s) => ({
+      stage: s.stage,
+      value: scaleForDisplay(plan.metric, s.value),
+    }));
+    data = { metric: toMetricView(plan.metric || ''), steps };
+  } else if (plan.template === 'T5') {
+    title = `${DIMENSION_LABELS[plan.dimension || ''] || plan.dimension} × ${DIMENSION_LABELS[plan.dimensionB || ''] || plan.dimensionB}`;
+    const matrix = (result.data as CrossTabResult).matrix.map((m) => ({ row: m.row, col: m.col, value: scaleForDisplay(plan.metric, m.value) }));
+    data = { metric: toMetricView(plan.metric || ''), rows: toDimView(plan.dimension || ''), cols: toDimView(plan.dimensionB || ''), matrix };
+  } else {
+    // T8
+    data = result.data as Record<string, unknown>;
+  }
+
+  const factSheet = buildFactSheet(plan.template, plan.metric, title, data);
+  const biResult: BuiltBiResult = { template: plan.template, title, interpretation, filtersApplied, data, narrative: '' };
+  return { ok: true, biResult, factSheet };
+}
+
 /**
  * `recordToTextEmbeddable()`(src/lib/record-to-text.ts)と同じ手法: 各関数を `.toString()`
  * して連結し、n8n Code node にそのまま貼り付けて実行できる文字列を返す。定数(const)は
@@ -426,6 +561,7 @@ export function aggregateEmbeddable(): string {
     `const METRIC_LABELS = ${JSON.stringify(METRIC_LABELS)};`,
     `const DIMENSION_LABELS = ${JSON.stringify(DIMENSION_LABELS)};`,
     `const METRIC_UNITS = ${JSON.stringify(METRIC_UNITS)};`,
+    `const PERIOD_LABELS = ${JSON.stringify(PERIOD_LABELS)};`,
   ];
   const fns = [
     fieldStr,
@@ -441,6 +577,7 @@ export function aggregateEmbeddable(): string {
     runAggregate,
     formatMetricValueForFactSheet,
     buildFactSheet,
+    buildBiResult,
   ].map((fn) => fn.toString());
   return [shim, ...consts, ...fns].join('\n');
 }

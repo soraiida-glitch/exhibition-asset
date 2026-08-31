@@ -5,6 +5,7 @@ import {
   aggregateEmbeddable,
   aggregateFunnel,
   applyFilters,
+  buildBiResult,
   buildFactSheet,
   buildInterpretation,
   computeMetric,
@@ -12,6 +13,7 @@ import {
 } from '../aggregate';
 import type { KintoneRecordFields } from '../aggregate';
 import { DIMENSIONS } from '../dimensions';
+import { fiscalEmbeddable, resolvePeriodPreset } from '../fiscal';
 import { OPPORTUNITY_STAGE_OPTIONS } from '../../apps/schema';
 
 function opp(fields: {
@@ -270,6 +272,59 @@ describe('buildFactSheet (narrateとquery/refineの両方で共用する表示�
   it('formats win_rate as a percentage with one decimal, not a 0-1 fraction', () => {
     const factSheet = buildFactSheet('T1', 'win_rate', '受注率', { value: 50 });
     expect(factSheet).toBe('受注率: 50.0%');
+  });
+});
+
+// RELVA BI 追加要件定義書 — Aggregate BI(n8n)とdashboard.ts(初期ダッシュボード)の両方が呼ぶ
+// 唯一の「意味論コード → 表示確定済みBiResult」変換。period解決は引数注入(resolvePeriod)で
+// 受け取る設計であることを含めて検証する(このファイル自体は実行時importを持たない)。
+describe('buildBiResult (Aggregate BI・dashboard.ts共通の唯一の変換経路)', () => {
+  const today = new Date(2026, 7, 30); // 2026-08-30 -> 今期 2026-04-01〜2027-03-31
+  const input = { opportunityRecords: OPPORTUNITIES, leadRecords: [] };
+
+  it('builds a T1 biResult with a period filter label and a matching factSheet', () => {
+    const outcome = buildBiResult(input, { template: 'T1', metric: 'won_amount', period: 'current_fiscal_year' }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.biResult.template).toBe('T1');
+    expect(outcome.biResult.filtersApplied[0]).toEqual({ label: '期間', value: '今期(2026-04-01〜2027-03-31)' });
+    expect(outcome.factSheet).toContain('万円');
+  });
+
+  it('builds a T2 biResult, appending the dimension label to the title', () => {
+    const outcome = buildBiResult(input, { template: 'T2', metric: 'count', dimension: 'owner', period: 'all' }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.biResult.title).toBe('件数(担当者別)');
+    expect(outcome.biResult.filtersApplied).toEqual([]); // period:allは絞り込みを一切かけない
+  });
+
+  it('propagates a structured error from runAggregate instead of throwing (e.g. invalid dimension/metric combo)', () => {
+    const outcome = buildBiResult(
+      input,
+      { template: 'T2', metric: 'amount_sum', dimension: 'lead_source', period: 'all' },
+      today,
+      resolvePeriodPreset,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.message).toMatch(/件数のみ/);
+  });
+
+  it('is callable standalone when embedded via aggregateEmbeddable() + fiscalEmbeddable() together (the exact concatenation Aggregate BI uses)', () => {
+    const embeddable = `${aggregateEmbeddable()}\n${fiscalEmbeddable()}`;
+    // 埋め込み文字列の中では resolvePeriodPreset がスコープ内に既にあるので(fiscalEmbeddable()
+    // 経由)、外からは3引数の関数として呼べる——4引数版(buildBiResultそのもの)とは型が異なる。
+    const isolatedBuild = new Function(
+      `${embeddable}\nreturn buildBiResult(arguments[0], arguments[1], arguments[2], resolvePeriodPreset);`,
+    ) as (
+      input: Parameters<typeof buildBiResult>[0],
+      plan: Parameters<typeof buildBiResult>[1],
+      today: Date,
+    ) => ReturnType<typeof buildBiResult>;
+
+    const plan = { template: 'T1' as const, metric: 'won_amount' as const, period: 'current_fiscal_year' as const };
+    expect(isolatedBuild(input, plan, today)).toEqual(buildBiResult(input, plan, today, resolvePeriodPreset));
   });
 });
 
