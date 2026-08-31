@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadEnv, requireAppId } from '../config/env';
 import { KintoneAdminClient } from '../lib/kintone-client';
+import { runCustomizeSmokeTest } from './smoke-test-customize';
 
 // vite's package.json doesn't expose "bin" via its "exports" map, so import.meta.resolve()
 // can't find it — resolve the well-known node_modules path directly instead.
@@ -15,6 +16,15 @@ async function main() {
 
   console.log('Building chat.ts via vite ...');
   execFileSync(process.execPath, [VITE_BIN, 'build'], { stdio: 'inherit' });
+
+  // A successful `vite build` only proves the bundle is syntactically valid JS — it does NOT
+  // prove it runs without throwing in a real (Node-global-free) browser. This caught a real
+  // incident: echarts/zrender's process.env.NODE_ENV checks weren't stripped in the library-mode
+  // build, so the deployed chat.js crashed at load time on every kintone page, silently breaking
+  // the whole chat widget — not just the new BI dashboard. Never upload a bundle that fails this.
+  console.log('Smoke-testing the built bundle in a headless browser before uploading ...');
+  await runCustomizeSmokeTest(BUNDLE_PATH);
+  console.log('   -> OK.');
 
   const bundle = fs.readFileSync(BUNDLE_PATH, 'utf-8');
   const themeCss = fs.readFileSync(THEME_CSS_PATH, 'utf-8');

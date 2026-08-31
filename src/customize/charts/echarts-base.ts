@@ -1,0 +1,98 @@
+/**
+ * RELVA BI (要件定義書 §6) — ECharts の共通初期化ヘルパー。
+ *
+ * kintone の全ページで読み込まれる IIFE バンドルに載るため、`echarts` のフルバンドルではなく
+ * `echarts/core` + 実際に使うチャート/コンポーネント/レンダラーだけを明示 import する
+ * (tree-shaking 前提のバレルではなく手動選択 — バンドルサイズの規律)。
+ *
+ * 色は新しいパレットを作らず、既存の THEME(単色アクセント #0098bb + グレー、
+ * 本セッションで確立した「レインボー禁止」方針)をそのまま再利用する。
+ */
+import * as echarts from 'echarts/core';
+import { BarChart, PieChart, FunnelChart, HeatmapChart } from 'echarts/charts';
+import type {
+  BarSeriesOption,
+  PieSeriesOption,
+  FunnelSeriesOption,
+  HeatmapSeriesOption,
+} from 'echarts/charts';
+import {
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  VisualMapComponent,
+} from 'echarts/components';
+import type {
+  GridComponentOption,
+  TooltipComponentOption,
+  LegendComponentOption,
+  VisualMapComponentOption,
+} from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
+import { THEME } from '../theme';
+
+echarts.use([
+  BarChart,
+  PieChart,
+  FunnelChart,
+  HeatmapChart,
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  VisualMapComponent,
+  CanvasRenderer,
+]);
+
+export type EChartsInstance = echarts.ECharts;
+export type EChartsOption = echarts.ComposeOption<
+  | BarSeriesOption
+  | PieSeriesOption
+  | FunnelSeriesOption
+  | HeatmapSeriesOption
+  | GridComponentOption
+  | TooltipComponentOption
+  | LegendComponentOption
+  | VisualMapComponentOption
+>;
+
+/** 単色アクセント+グレーのみ。カテゴリが増えても虹色にせず、濃淡で区別する。 */
+export const CHART_COLORS = {
+  primary: THEME.sora,
+  primaryDeep: THEME.soraDeep,
+  warn: THEME.hinode,
+  grid: THEME.mistLine,
+  label: '#5a6b7a',
+  neutralSteps: [THEME.soraDeep, THEME.sora, '#5aa9bd', THEME.mistLine, THEME.mist],
+} as const;
+
+export function initChart(container: HTMLElement): EChartsInstance {
+  return echarts.init(container, undefined, { renderer: 'canvas' });
+}
+
+export function disposeChart(chart: EChartsInstance): void {
+  if (!chart.isDisposed()) chart.dispose();
+}
+
+/** ResizeObserver で container のサイズ変化に追従する。返り値の関数で監視を止める(dispose とセットで呼ぶ)。 */
+export function attachResize(chart: EChartsInstance, container: HTMLElement): () => void {
+  const observer = new ResizeObserver(() => {
+    if (!chart.isDisposed()) chart.resize();
+  });
+  observer.observe(container);
+  return () => observer.disconnect();
+}
+
+/**
+ * container に対して EChartsインスタンスを作成し、option を適用し、リサイズ追従を貼る。
+ * 返り値の関数を呼べば resize監視の解除とインスタンスの破棄をまとめて行う
+ * (バー/ドーナツ/ファネル/ヒートマップの各ラッパーはこれを土台にする)。
+ */
+export function renderChart(container: HTMLElement, option: EChartsOption): () => void {
+  const chart = initChart(container);
+  chart.setOption(option);
+  const detachResize = attachResize(chart, container);
+  return () => {
+    detachResize();
+    disposeChart(chart);
+  };
+}

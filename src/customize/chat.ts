@@ -5,6 +5,13 @@ import {
   LEAD_STATUS_OPTIONS,
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
+import type { BiResult } from '../semantic/templates';
+import { escHtml } from './html-utils';
+// 既存の `import { escHtml } from './chat'` を壊さないための re-export。中身は html-utils.ts
+// (副作用のない場所) にある — RELVA BI のチャートコンポーネント(src/customize/charts/*)は
+// dev/playground からも読み込まれるため、chat.ts 経由ではなく html-utils.ts から直接 import する。
+export { escHtml };
+import { renderBiResult } from './bi-chat';
 import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
 import { initLeadInsights } from './lead-insights';
 import { initMeetingLog } from './meeting-log';
@@ -45,6 +52,8 @@ interface AgentResponse {
   referencedRecords?: ReferencedRecord[];
   action?: AgentAction | null;
   prefill?: Record<string, unknown>;
+  /** RELVA BI (要件定義書) — n8n の Format BI Response が設定する。ある場合のみチャートを描画する。 */
+  biResult?: BiResult;
 }
 
 interface MeishiResult {
@@ -141,23 +150,6 @@ const SESSION_ID = genId();
 const conversationHistory: ChatMessage[] = [];
 let lastKintoneContext: KintoneContextRef | null = null;
 let msgSeq = 0;
-
-export function escHtml(value: unknown): string {
-  return String(value ?? '').replace(/[&<>"']/g, (ch) => {
-    switch (ch) {
-      case '&':
-        return '&amp;';
-      case '<':
-        return '&lt;';
-      case '>':
-        return '&gt;';
-      case '"':
-        return '&quot;';
-      default:
-        return '&#39;';
-    }
-  });
-}
 
 function md2html(text: string): string {
   let html = escHtml(text);
@@ -467,6 +459,14 @@ function pushAI(text: string, data?: AgentResponse, question?: string): string {
     if (first?.recordId && first.appName) {
       lastKintoneContext = { recordId: first.recordId, appName: first.appName, label: first.label };
     }
+  }
+
+  if (data?.biResult) {
+    const biContainer = document.createElement('div');
+    el.appendChild(biContainer);
+    // ドリルダウンボタンは自然文をそのまま送信するだけ(ユーザーが打って送ったのと同じ扱い)。
+    // handleSend は下で定義されているが、関数宣言は巻き上げられるためこの前方参照で問題ない。
+    renderBiResult(biContainer, data.biResult, (routerQuery) => void handleSend(routerQuery));
   }
 
   getMsgsEl().appendChild(el);

@@ -43,6 +43,17 @@ export class KintoneAdminClient {
     await this.client.app.addFormFields({ app: appId, properties });
   }
 
+  /**
+   * Updates already-deployed fields in place (e.g. adding `fieldMappings` to an existing LOOKUP
+   * field, which `ensureFields` can't do since it only adds fields missing entirely). Deploys and
+   * waits, mirroring `ensureFields`'s composed shape.
+   */
+  async updateFields(appId: number, properties: KintoneFieldProperties): Promise<void> {
+    await this.client.app.updateFormFields({ app: appId, properties });
+    await this.deployApp(appId);
+    await this.waitForDeploy(appId);
+  }
+
   async deployApp(appId: number): Promise<void> {
     await this.client.app.deployApp({ apps: [{ app: appId }] });
   }
@@ -107,6 +118,37 @@ export class KintoneAdminClient {
       preview: opts.preview ?? false,
     });
     return result.properties;
+  }
+
+  /**
+   * Record-level read/write via the *admin* account rather than a per-app API token.
+   * Needed for cross-app operations (e.g. re-triggering a LOOKUP field's fieldMappings copy)
+   * where a narrowly-scoped per-app API token lacks read permission on the related app and
+   * kintone rejects the write with GAIA_LO04 ("... or you do not have permission to view the
+   * app or the field").
+   */
+  async getAllRecords<T = Record<string, unknown>>(
+    appId: number,
+    opts: { fields?: string[]; condition?: string } = {},
+  ): Promise<T[]> {
+    const records = await this.client.record.getAllRecords({
+      app: appId,
+      fields: opts.fields,
+      condition: opts.condition,
+    });
+    return records as T[];
+  }
+
+  async getRecord<T = Record<string, unknown>>(appId: number, id: string | number): Promise<T> {
+    const { record } = await this.client.record.getRecord({ app: appId, id });
+    return record as T;
+  }
+
+  async updateAllRecords(
+    appId: number,
+    records: Array<{ id: string | number; record: Record<string, { value: unknown }> }>,
+  ): Promise<void> {
+    await this.client.record.updateAllRecords({ app: appId, records });
   }
 
   /** Unused in phase 1; built now for phase 3 (business-card upload) reuse. */

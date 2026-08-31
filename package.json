@@ -22,9 +22,13 @@
     "setup:meeting-log": "tsx src/scripts/deploy-meeting-log-workflow.ts",
     "setup:sales-scoring": "tsx src/scripts/deploy-sales-scoring-workflow.ts",
     "setup:proposal": "tsx src/scripts/deploy-proposal-workflow.ts",
+    "backfill:industry": "tsx src/scripts/backfill-industry.ts",
+    "eval:router": "tsx src/scripts/eval-router.ts",
     "sync:bulk": "tsx src/scripts/bulk-sync-pinecone.ts",
     "sync:manuals": "tsx src/scripts/sync-manuals-pinecone.ts",
+    "dev": "vite",
     "build:customize": "vite build",
+    "smoke:customize": "tsx src/scripts/smoke-test-customize.ts",
     "deploy:customize": "tsx src/scripts/deploy-customize.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -35,13 +39,16 @@
   },
   "dependencies": {
     "@kintone/rest-api-client": "^6.2.1",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "echarts": "^6.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.7.0",
     "@kintone/dts-gen": "^9.0.8",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^20.14.0",
     "eslint": "^9.7.0",
+    "jsdom": "^29.1.1",
     "prettier": "^3.3.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",

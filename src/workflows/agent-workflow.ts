@@ -1,8 +1,13 @@
 import {
   ACCOUNT_INDUSTRY_OPTIONS,
   ACCOUNT_STATUS_OPTIONS,
+  LEAD_SOURCE_OPTIONS,
+  LEAD_STATUS_OPTIONS,
+  LOSS_REASON_OPTIONS,
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
+import { aggregateEmbeddable } from '../semantic/aggregate';
+import { fiscalEmbeddable } from '../semantic/fiscal';
 
 export const AGENT_WORKFLOW_NAME = '[kintone] 秘書AIエージェント';
 export const AGENT_WEBHOOK_PATH = 'exhibition-agent-chat';
@@ -155,6 +160,94 @@ prefillのキーは必ず以下のフィールドコード(英数字)を使っ�
   対応できない旨を伝えてください。「個別になら削除できます」のような、実際には存在しない
   操作が可能であるかのような表現は絶対にしないでください。`;
 
+/**
+ * RELVA BI (要件定義書 §5) — NL→テンプレート ルーター。既存の Query Planner / Main AI とは
+ * 完全に独立した経路として動く(Feedback Check? の false 分岐の直後、Query Planner の手前で
+ * 分岐する)。このプロンプトの役割は「集計に使うパラメータを選ぶこと」だけで、数値の計算は
+ * 一切行わない——実際の集計は src/semantic/aggregate.ts(Aggregate BI ノードに埋め込み)が
+ * 決定的に行う。src/scripts/eval-router.ts がこのプロンプトをそのまま再利用して精度を測る。
+ */
+export const BI_ROUTER_SYSTEM_PROMPT = `あなたはCRMチャットの「分析(BI)質問」判定・変換ルーターです。ユーザーの発言が
+案件・リードの集計/分析に関する質問かどうかを判定し、該当する場合は集計に使うパラメータへ
+変換してください。あなた自身は数値を計算しません——パラメータを選ぶことだけが役目です。
+
+【対象となる質問の例】
+「今期の受注額はいくら?」「担当者別の受注額を見せて」「フェーズごとの件数は?」
+「失注理由を業種別に分析して」「パイプラインの状況を教えて」「受注率はどれくらい?」
+「今月クロージング予定の案件一覧を見せて」
+
+【対象外(分析質問ではない)の例】
+特定の会社名・案件名・人物についての質問、雑談、新規登録・編集の依頼、削除依頼、
+一般的な使い方の質問など。この場合は template を null にしてください。
+
+利用できる指標(metric)は次のいずれかのみです:
+- count(件数) / amount_sum(金額合計) / amount_avg(平均金額) / won_amount(受注額、stage=成約のみ)
+- won_count(受注件数) / lost_count(失注件数) / win_rate(受注率、成約+失注を分母とする)
+
+利用できる次元(dimension)は次のいずれかのみです:
+- owner(担当者、案件のフィールド、自由入力)
+- stage(フェーズ、案件のフィールド、選択肢: ${OPPORTUNITY_STAGE_OPTIONS.join(' / ')})
+- industry(業種、案件のフィールド、選択肢: ${ACCOUNT_INDUSTRY_OPTIONS.join(' / ')})
+- loss_reason(失注理由、案件のフィールド、選択肢: ${LOSS_REASON_OPTIONS.join(' / ')} —
+  stage=失注でない案件には意味を持たない次元です)
+- account(取引先、案件のフィールド、自由入力)
+- lead_source(流入経路、リードのフィールド、選択肢: ${LEAD_SOURCE_OPTIONS.join(' / ')})
+- lead_status(リードステータス、リードのフィールド、選択肢: ${LEAD_STATUS_OPTIONS.join(' / ')})
+
+lead_source/lead_status を使う場合、metric は count のみ選べます(リードには金額・フェーズが
+存在しないため)。上記以外の次元・指標名は存在しません——似た言葉が出てきても無理に対応
+させず、対象外として扱ってください。
+
+テンプレート(template)は次のいずれかを選んでください:
+- "T1": 単一の数値のみを聞いている(例:「今期の受注額は?」「今月の成約件数は?」)。dimension不要。
+- "T2": 1つの次元でカテゴリ別に集計したい(例:「担当者別の受注額」「流入経路別のリード数」)。
+  dimensionが必須です。
+- "T4": パイプライン/フェーズ推移を見たい(例:「パイプラインの状況」「フェーズごとの件数」)。
+  常にフェーズ別の指標を返すため、metric以外(dimension等)は不要です。
+- "T5": 2つの次元を掛け合わせたクロス集計をしたい(例:「失注理由を業種別に」)。dimensionと
+  dimensionBの両方が必須です。同じ対象(案件どうし、またはリードどうし)の次元のみ組み合わせ
+  可能です。
+- "T8": 条件に合う案件の一覧が欲しい(例:「今月クロージング予定の案件一覧」)。metric・
+  dimensionは不要です。
+
+filtersには、質問に含まれる絞り込み条件を入れてください(期間を除く)。各要素は
+{"field": "実フィールドコード", "op": "="|"!="|"in"|"not_in", "value": "文字列 または 文字列配列"}
+の形式です。使えるfieldは stage / owner / industry / loss_reason / account(案件)、
+status / source(リード)のみで、値は上で示した選択肢と一字一句そのまま一致させてください。
+
+期間の絞り込みはfiltersに入れず、代わりに period で表現してください:
+- "current_fiscal_year": 「今期」「今年度」など、または期間の指定がない場合のデフォルト。
+- "current_month": 「今月」
+- "last_month": 「先月」
+- "all": 明示的に「全期間」「これまでの累計」など期間を絞らない場合
+上記に無い期間(特定の四半期・特定の月名など)を指定された場合は、template を null にし、
+needClarify でその期間が未対応である旨を伝えてください。
+
+判定した内容が曖昧・矛盾している場合(必須のdimensionが無い、metricとdimensionの組み合わせが
+無効など)は、template を null にし、needClarify に日本語の聞き返し文を入れてください。
+分析質問でない場合(対象外の例に該当する場合)は needClarify も null にしてください。
+
+必ず次のJSON形式のみで回答してください(説明文は不要):
+{"template": "T1"|"T2"|"T4"|"T5"|"T8"|null, "metric": "<指標コード>"|null, "dimension": "<次元コード>"|null, "dimensionB": "<次元コード>"|null, "period": "current_fiscal_year"|"current_month"|"last_month"|"all"|null, "filters": [...], "needClarify": "<日本語の聞き返し文>"|null}`;
+
+/**
+ * RELVA BI (要件定義書 §1 絶対原則) — factSheet に既にある数値・表記のみを引用してよく、
+ * 新しい数値の計算・発明はもちろん、金額の万円換算やパーセント表記への変換もLLMにさせない
+ * ナレーション生成。「815万円」を「8,150万円」と一桁多く言う事故が実際に本番で発生した
+ * (Aggregate BI が円の生数値をそのまま渡し、LLM自身に万円変換を計算させていたのが原因)ため、
+ * Aggregate BI 側で表記を確定させた factSheet だけを渡し、LLMには引用のみをさせる。
+ */
+export const BI_NARRATIVE_SYSTEM_PROMPT = `あなたはBIチャットの一言コメント生成器です。与えられたJSON({title, interpretation,
+factSheet})を読み、日本語で1〜2文の短いコメントを書いてください。
+
+factSheetに書かれている数値・単位の表記(「約815万円」「40.0%」のような書式)は既に
+確定済みの表示用文字列です。そのまま引用してください——万円への換算やパーセントへの変換、
+桁の書き直しなど、表記を自分で計算し直すことは絶対にしないでください(単位を書き換えると
+桁を間違えます)。factSheetに無い数値を新しく計算したり発明したりもしないでください。
+断定的な結論よりも、気づきや次のアクションにつながる短いコメントを心がけてください。
+
+必ず次のJSON形式のみで回答してください(説明文は不要): {"narrative": "コメント本文"}`;
+
 function offsetPositions(startX: number, y: number, count: number, gap = 220): [number, number][] {
   return Array.from({ length: count }, (_, i) => [startX + i * gap, y]);
 }
@@ -163,6 +256,12 @@ export function buildAgentWorkflow(config: AgentWorkflowConfig) {
   const positions = offsetPositions(0, 300, 28);
   let p = 0;
   const nextPos = () => positions[p++];
+
+  // RELVA BI (要件定義書 §5) — 既存チェーンとは別の並列サブグラフ。キャンバス上で見分けやすい
+  // よう、既存の下(y=620)に別レーンとして配置する(実行順序には影響しない)。
+  const biPositions = offsetPositions(660, 620, 14);
+  let bp = 0;
+  const nextBiPos = () => biPositions[bp++];
 
   const kintoneHeader = (token: string) => [{ name: 'X-Cybozu-API-Token', value: token }];
   const openaiHeaders = () => [
@@ -305,6 +404,458 @@ return [{ json: { ...$input.item.json, valid: provided === expected } }];
         responseBody: '={{ JSON.stringify({ success: true }) }}',
       },
     },
+    // ---- RELVA BI (要件定義書 §5) サブグラフ開始 ----
+    // Feedback Check? の false 分岐から Query Planner へ向かう手前で分岐する。BI質問でなければ
+    // Is BI Question? の false 分岐からそのまま既存の Query Planner に合流し、以降の一般チャット
+    // 経路は一切変更しない。
+    {
+      id: 'bi_router',
+      name: 'BI Router',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextBiPos(),
+      parameters: {
+        method: 'POST',
+        url: 'https://api.openai.com/v1/chat/completions',
+        sendHeaders: true,
+        headerParameters: { parameters: openaiHeaders() },
+        sendBody: true,
+        specifyBody: 'json',
+        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(BI_ROUTER_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ message: $json.body.message, history: ($json.body.history || []).slice(-6) }) } ] }) }}`,
+        options: {},
+      },
+    },
+    {
+      id: 'parse_bi_plan',
+      name: 'Parse BI Plan',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+const original = $node["Verify Secret"].json.body || {};
+const METRIC_CODES = ["count", "amount_sum", "amount_avg", "won_amount", "won_count", "lost_count", "win_rate"];
+const DIMENSION_FIELD_MAP = {
+  owner: { field: "owner", targetApp: "opportunity" },
+  stage: { field: "stage", targetApp: "opportunity" },
+  industry: { field: "industry", targetApp: "opportunity" },
+  loss_reason: { field: "loss_reason", targetApp: "opportunity" },
+  account: { field: "account", targetApp: "opportunity" },
+  lead_source: { field: "source", targetApp: "lead" },
+  lead_status: { field: "status", targetApp: "lead" },
+};
+const TEMPLATE_IDS = ["T1", "T2", "T4", "T5", "T8"];
+const PERIODS = ["current_fiscal_year", "current_month", "last_month", "all"];
+
+let raw;
+try {
+  raw = JSON.parse($json.choices[0].message.content);
+} catch (e) {
+  raw = {};
+}
+
+// 決定的なバリデーション: ルーターLLMの出力を鵜呑みにせず、既知のコード集合と組み合わせの
+// 妥当性をここでコード側に確認させる(LLMのプロンプト遵守だけに頼らない——このファイルの
+// 既存の Format Response が同じ理由で採用している方針を踏襲)。
+function needClarify(message) {
+  return { isBiQuestion: true, template: null, needClarify: message };
+}
+
+let plan;
+if (raw && raw.template && TEMPLATE_IDS.indexOf(raw.template) !== -1) {
+  const dim = raw.dimension ? DIMENSION_FIELD_MAP[raw.dimension] : undefined;
+  const dimB = raw.dimensionB ? DIMENSION_FIELD_MAP[raw.dimensionB] : undefined;
+  // T8(条件抽出リスト)は runAggregate 側で metric を一切参照しない(固定カラムの一覧を返す
+  // だけ)ため、ここでも metric を必須にしない——実際にライブでT8質問が「指標を教えて」と
+  // 聞き返されてしまう回帰を起こしたため明示的に除外している。
+  const metricOk = raw.template === "T8" || (raw.metric && METRIC_CODES.indexOf(raw.metric) !== -1);
+
+  if (!metricOk) {
+    plan = needClarify("どの指標について知りたいか教えていただけますか?(例: 件数、金額合計、受注率など)");
+  } else if (raw.dimension && !dim) {
+    plan = needClarify("すみません、その切り口には対応していません。担当者別・フェーズ別・業種別・失注理由別・流入経路別などでお試しください。");
+  } else if (raw.dimensionB && !dimB) {
+    plan = needClarify("すみません、その切り口には対応していません。");
+  } else if (dim && dim.targetApp === "lead" && raw.template !== "T8" && raw.metric !== "count") {
+    plan = needClarify("リードの分析では件数のみ集計できます。");
+  } else if (raw.template === "T2" && !dim) {
+    plan = needClarify("何を軸にカテゴリ別に見たいか教えていただけますか?(例: 担当者別、フェーズ別など)");
+  } else if (raw.template === "T5" && (!dim || !dimB)) {
+    plan = needClarify("クロス集計には2つの軸が必要です。例えば「失注理由を業種別に」のように教えてください。");
+  } else if (raw.template === "T5" && dim && dimB && dim.targetApp !== dimB.targetApp) {
+    plan = needClarify("クロス集計は案件どうし、またはリードどうしの軸のみ組み合わせられます。");
+  } else {
+    plan = {
+      isBiQuestion: true,
+      template: raw.template,
+      metric: raw.metric,
+      dimension: raw.dimension || undefined,
+      dimensionB: raw.dimensionB || undefined,
+      period: PERIODS.indexOf(raw.period) !== -1 ? raw.period : "current_fiscal_year",
+      filters: Array.isArray(raw.filters)
+        ? raw.filters.filter((f) => f && typeof f.field === "string" && typeof f.op === "string")
+        : [],
+      needClarify: null,
+    };
+  }
+} else if (raw && raw.needClarify) {
+  plan = needClarify(String(raw.needClarify));
+} else {
+  plan = { isBiQuestion: false };
+}
+
+return [{ json: { ...original, biPlan: plan } }];
+`.trim(),
+      },
+    },
+    {
+      id: 'is_bi_question_if',
+      name: 'Is BI Question?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextBiPos(),
+      parameters: {
+        conditions: {
+          boolean: [{ value1: '={{ !!$json.biPlan.isBiQuestion }}', value2: true }],
+        },
+      },
+    },
+    {
+      id: 'needs_bi_clarify_if',
+      name: 'Needs BI Clarify?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextBiPos(),
+      parameters: {
+        conditions: {
+          boolean: [{ value1: '={{ !$json.biPlan.template }}', value2: true }],
+        },
+      },
+    },
+    {
+      id: 'format_bi_clarify',
+      name: 'Format BI Clarify',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+const original = $json;
+return [{ json: {
+  response: {
+    answer: (original.biPlan && original.biPlan.needClarify) || "もう少し詳しく教えていただけますか?",
+    referencedRecords: [],
+    action: null,
+    prefill: {},
+  },
+  sessionId: original.sessionId || "",
+  userId: original.userId || "",
+  userName: original.userName || "",
+  message: original.message || "",
+} }];
+`.trim(),
+      },
+    },
+    {
+      id: 'fetch_bi_opportunities',
+      name: 'Fetch BI Opportunities',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextBiPos(),
+      parameters: {
+        method: 'GET',
+        url: `${config.kintoneBaseUrl}/k/v1/records.json`,
+        sendHeaders: true,
+        headerParameters: { parameters: kintoneHeader(config.opportunityApiToken) },
+        sendQuery: true,
+        queryParameters: {
+          parameters: [
+            { name: 'app', value: String(config.opportunityAppId) },
+            // Search Opportunity Owners と同じ「デモ規模なら500件で足りる」前提の全件取得
+            // (別ブランチのため専用ノードとして持つ — 既存チェーンには触れない)。
+            { name: 'query', value: 'limit 500' },
+          ],
+        },
+        options: {},
+      },
+    },
+    {
+      id: 'fetch_bi_leads',
+      name: 'Fetch BI Leads',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextBiPos(),
+      parameters: {
+        method: 'GET',
+        url: `${config.kintoneBaseUrl}/k/v1/records.json`,
+        sendHeaders: true,
+        headerParameters: { parameters: kintoneHeader(config.leadApiToken) },
+        sendQuery: true,
+        queryParameters: {
+          parameters: [
+            { name: 'app', value: String(config.leadAppId) },
+            { name: 'query', value: 'limit 500' },
+          ],
+        },
+        options: {},
+      },
+    },
+    {
+      id: 'aggregate_bi',
+      name: 'Aggregate BI',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+${aggregateEmbeddable()}
+${fiscalEmbeddable()}
+
+const original = $node["Parse BI Plan"].json;
+const plan = original.biPlan;
+
+const opportunityRecords = $node["Fetch BI Opportunities"].json.records || [];
+const leadRecords = $node["Fetch BI Leads"].json.records || [];
+
+// DIMENSION_LABELS/METRIC_LABELS は aggregateEmbeddable() が既に宣言済み(上に埋め込み済み)
+// なので、ここでは再宣言しない(再宣言すると SyntaxError になる)。単位はaggregate.ts側に
+// 無いのでここでだけ持つ。
+const METRIC_UNITS = { count: "件", amount_sum: "円", amount_avg: "円", won_amount: "円", won_count: "件", lost_count: "件", win_rate: "%" };
+const PERIOD_LABELS = { current_fiscal_year: "今期", current_month: "今月", last_month: "先月", all: "全期間" };
+
+// period(相対的な期間表現)を実行時の「今日」で絶対的な close_date 範囲へ解決する。
+// ルーターLLMには日付計算をさせない(要件定義書 §1 の絶対原則)——ここはコード側で決定的に行う。
+function pad2(n) { return String(n).padStart(2, "0"); }
+function monthRange(year, month) {
+  const lastDay = new Date(year, month, 0).getDate();
+  return { start: year + "-" + pad2(month) + "-01", end: year + "-" + pad2(month) + "-" + pad2(lastDay) };
+}
+
+const today = new Date();
+let periodFilter = null;
+if (plan.period !== "all") {
+  let range;
+  if (plan.period === "current_month") {
+    range = monthRange(today.getFullYear(), today.getMonth() + 1);
+  } else if (plan.period === "last_month") {
+    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    range = monthRange(prev.getFullYear(), prev.getMonth() + 1);
+  } else {
+    range = currentFiscalYearRange(today);
+  }
+  periodFilter = { field: "close_date", op: "range", value: range };
+}
+
+const filters = (Array.isArray(plan.filters) ? plan.filters.slice() : []);
+if (periodFilter) filters.push(periodFilter);
+
+const result = runAggregate({ opportunityRecords, leadRecords }, {
+  template: plan.template,
+  metric: plan.metric,
+  dimension: plan.dimension,
+  dimensionB: plan.dimensionB,
+  filters,
+});
+
+if (!result.ok) {
+  return [{ json: { ...original, biAggregateError: result.message } }];
+}
+
+const filtersApplied = [];
+if (periodFilter) {
+  filtersApplied.push({
+    label: "期間",
+    value: (PERIOD_LABELS[plan.period] || plan.period) + "(" + periodFilter.value.start + "〜" + periodFilter.value.end + ")",
+  });
+}
+for (const f of (plan.filters || [])) {
+  filtersApplied.push({
+    label: DIMENSION_LABELS[f.field] || f.field,
+    value: Array.isArray(f.value) ? f.value.join("・") : String(f.value),
+  });
+}
+
+const interpretationFilterLabels = filtersApplied.map((f) => f.label + "=" + f.value);
+// T8(条件抽出リスト)はmetricを持たない(runAggregateもmetricを使わない)ため、
+// buildInterpretationの「metricを○○別に集計」という文言はそもそも当てはまらない——
+// 専用の文言にする(そうしないと「でnull集計しました」のような表示になる)。
+const interpretation =
+  plan.template === "T8"
+    ? (interpretationFilterLabels.length ? interpretationFilterLabels.join("・") + "で" : "") + "条件に合う案件を抽出しました。"
+    : buildInterpretation(plan.metric, plan.dimension, plan.dimensionB, interpretationFilterLabels);
+
+function toMetricView(code) { return { code: code, label: METRIC_LABELS[code] || code, unit: METRIC_UNITS[code] || "" }; }
+function toDimView(code) { return { code: code, label: DIMENSION_LABELS[code] || code }; }
+
+// computeMetric() の win_rate は 0〜1 の割合(0.4 = 40%)で返るが、unit は "%" として表示する
+// ため、表示用データに詰める直前にだけ 0〜100 のスケールへ直す(この関数は表示用の単位合わせ
+// のみを行い、値そのものの再計算はしない——集計値は runAggregate が既に確定させている)。
+function scaleForDisplay(metric, value) { return metric === "win_rate" ? value * 100 : value; }
+
+let title = plan.template === "T8" ? "条件に合う案件一覧" : METRIC_LABELS[plan.metric] || plan.metric;
+let data;
+if (plan.template === "T1") {
+  data = { value: scaleForDisplay(plan.metric, result.data.value), unit: METRIC_UNITS[plan.metric] || "" };
+} else if (plan.template === "T2") {
+  title = title + "(" + (DIMENSION_LABELS[plan.dimension] || plan.dimension) + "別)";
+  const series = result.data.series.map((s) => ({ key: s.key, value: scaleForDisplay(plan.metric, s.value) }));
+  data = { metric: toMetricView(plan.metric), dimension: toDimView(plan.dimension), series };
+} else if (plan.template === "T4") {
+  title = title + "(パイプライン)";
+  const steps = result.data.steps.map((s) => ({ stage: s.stage, value: scaleForDisplay(plan.metric, s.value) }));
+  data = { metric: toMetricView(plan.metric), steps };
+} else if (plan.template === "T5") {
+  title = (DIMENSION_LABELS[plan.dimension] || plan.dimension) + " × " + (DIMENSION_LABELS[plan.dimensionB] || plan.dimensionB);
+  const matrix = result.data.matrix.map((m) => ({ row: m.row, col: m.col, value: scaleForDisplay(plan.metric, m.value) }));
+  data = { metric: toMetricView(plan.metric), rows: toDimView(plan.dimension), cols: toDimView(plan.dimensionB), matrix };
+} else if (plan.template === "T8") {
+  title = "条件に合う案件一覧";
+  data = result.data;
+}
+
+// ナレーションLLMには生のbiResult(円単位の生数値など)をそのまま渡さない——万円換算や
+// パーセント表記をLLM自身に計算させると誤変換する(実際に「815万円」を「8,150万円」と
+// 一桁多く言う事故が本番で発生した)。ここで日本語の表示用文字列に決定的に整形してから
+// 渡し、LLMには「この表記をそのまま引用するだけ」の役目にする。
+function formatMetricValue(metric, value) {
+  const unit = METRIC_UNITS[metric] || "";
+  if (unit === "円") return "約" + Math.round(value / 10000).toLocaleString("ja-JP") + "万円";
+  if (unit === "%") return value.toFixed(1) + "%";
+  return value.toLocaleString("ja-JP") + unit;
+}
+
+let factSheet = "";
+if (plan.template === "T1") {
+  factSheet = title + ": " + formatMetricValue(plan.metric, data.value);
+} else if (plan.template === "T2") {
+  factSheet = data.series.map((s) => s.key + ": " + formatMetricValue(plan.metric, s.value)).join("、");
+} else if (plan.template === "T4") {
+  factSheet = data.steps.map((s) => s.stage + ": " + formatMetricValue(plan.metric, s.value)).join("、");
+} else if (plan.template === "T5") {
+  factSheet = data.matrix
+    .filter((m) => m.value > 0)
+    .map((m) => m.row + "×" + m.col + ": " + formatMetricValue(plan.metric, m.value))
+    .join("、");
+} else if (plan.template === "T8") {
+  factSheet = data.records.length + "件: " + data.records.map((r) => r.deal_name).join("、");
+}
+
+const biResult = {
+  template: plan.template,
+  title,
+  interpretation,
+  filtersApplied,
+  data,
+  narrative: "",
+};
+
+return [{ json: { ...original, biResult, factSheet } }];
+`.trim(),
+      },
+    },
+    {
+      id: 'bi_aggregate_ok_if',
+      name: 'BI Aggregate OK?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextBiPos(),
+      parameters: {
+        conditions: {
+          boolean: [{ value1: '={{ !!$json.biResult }}', value2: true }],
+        },
+      },
+    },
+    {
+      id: 'format_bi_error',
+      name: 'Format BI Error',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+const original = $json;
+return [{ json: {
+  response: {
+    answer: original.biAggregateError || "集計中にエラーが発生しました。",
+    referencedRecords: [],
+    action: null,
+    prefill: {},
+  },
+  sessionId: original.sessionId || "",
+  userId: original.userId || "",
+  userName: original.userName || "",
+  message: original.message || "",
+} }];
+`.trim(),
+      },
+    },
+    {
+      id: 'bi_narrative',
+      name: 'BI Narrative',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextBiPos(),
+      parameters: {
+        method: 'POST',
+        url: 'https://api.openai.com/v1/chat/completions',
+        sendHeaders: true,
+        headerParameters: { parameters: openaiHeaders() },
+        sendBody: true,
+        specifyBody: 'json',
+        // biResult をそのまま渡さない(円の生数値を渡すとLLMが自分で万円換算して桁を間違える
+        // ——実際に本番で発生した)。Aggregate BI が組み立てた表示確定済みの factSheet だけを渡す。
+        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(BI_NARRATIVE_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ title: $node["Aggregate BI"].json.biResult.title, interpretation: $node["Aggregate BI"].json.biResult.interpretation, factSheet: $node["Aggregate BI"].json.factSheet }) } ] }) }}`,
+        options: {},
+      },
+    },
+    {
+      id: 'format_bi_response',
+      name: 'Format BI Response',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+const original = $node["Aggregate BI"].json;
+let narrative = "";
+try {
+  const parsed = JSON.parse($json.choices[0].message.content);
+  narrative = typeof parsed.narrative === "string" ? parsed.narrative : "";
+} catch (e) {
+  narrative = "";
+}
+const biResult = { ...original.biResult, narrative: narrative || original.biResult.interpretation };
+return [{ json: {
+  response: {
+    answer: biResult.interpretation + (narrative ? " " + narrative : ""),
+    biResult,
+    referencedRecords: [],
+    action: null,
+    prefill: {},
+  },
+  sessionId: original.sessionId || "",
+  userId: original.userId || "",
+  userName: original.userName || "",
+  message: original.message || "",
+} }];
+`.trim(),
+      },
+    },
+    // ---- RELVA BI サブグラフ終了 ----
+    {
+      id: 'prepare_final_response',
+      name: 'Prepare Final Response',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        // 一般チャット経路(Format Response)とBI経路(Format BI Clarify/Response/Error)の
+        // 4つの終端ノードを1つの安定した名前に集約する恒等ノード。Respond to Webhook が
+        // 特定ノード名を直接参照する既存の実装のままだと、実行されなかった方のブランチの
+        // ノード名を参照してエラーになるため、この1ホップだけ挟んで解決する。
+        jsCode: 'return [{ json: $json }];',
+      },
+    },
     {
       id: 'query_planner',
       name: 'Query Planner',
@@ -318,7 +869,12 @@ return [{ json: { ...$input.item.json, valid: provided === expected } }];
         headerParameters: { parameters: openaiHeaders() },
         sendBody: true,
         specifyBody: 'json',
-        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(PLANNER_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ message: $json.body.message, history: ($json.body.history || []).slice(-6) }) } ] }) }}`,
+        // RELVA BI 追加以前は Feedback Check? から直接この Query Planner に繋がっていたため
+        // $json が生のwebhookペイロード({body:{...}})のままだった。今は BI Router → Parse BI
+        // Plan(bodyをフラット化して返す)を経由するため、$json.body は無くなっている——
+        // Parse Query Plan が既に同じ理由で $node["Verify Secret"].json.body を直接読んでいる
+        // のと同じパターンに合わせ、predecessorの形に依存しないようにする。
+        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(PLANNER_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ message: $node["Verify Secret"].json.body.message, history: ($node["Verify Secret"].json.body.history || []).slice(-6) }) } ] }) }}`,
         options: {},
       },
     },
@@ -801,7 +1357,9 @@ return [{ json: {
       position: nextPos(),
       parameters: {
         respondWith: 'json',
-        responseBody: '={{ $node["Format Response"].json.response }}',
+        // Format Response(一般チャット)・Format BI Clarify/Response/Error(BI)のどれが
+        // 実行されたかによらず、Prepare Final Response が常に1つに集約している。
+        responseBody: '={{ $node["Prepare Final Response"].json.response }}',
       },
     },
   ];
@@ -818,7 +1376,7 @@ return [{ json: {
     'Feedback Check?': {
       main: [
         [{ node: 'Negative Feedback?', type: 'main', index: 0 }],
-        [{ node: 'Query Planner', type: 'main', index: 0 }],
+        [{ node: 'BI Router', type: 'main', index: 0 }],
       ],
     },
     'Negative Feedback?': {
@@ -829,6 +1387,35 @@ return [{ json: {
     },
     'Embed Feedback Question': { main: [[{ node: 'Save Feedback Embedding', type: 'main', index: 0 }]] },
     'Save Feedback Embedding': { main: [[{ node: 'Respond Feedback Ack', type: 'main', index: 0 }]] },
+    // ---- RELVA BI (要件定義書 §5) サブグラフ ----
+    'BI Router': { main: [[{ node: 'Parse BI Plan', type: 'main', index: 0 }]] },
+    'Parse BI Plan': { main: [[{ node: 'Is BI Question?', type: 'main', index: 0 }]] },
+    'Is BI Question?': {
+      main: [
+        [{ node: 'Needs BI Clarify?', type: 'main', index: 0 }],
+        [{ node: 'Query Planner', type: 'main', index: 0 }],
+      ],
+    },
+    'Needs BI Clarify?': {
+      main: [
+        [{ node: 'Format BI Clarify', type: 'main', index: 0 }],
+        [{ node: 'Fetch BI Opportunities', type: 'main', index: 0 }],
+      ],
+    },
+    'Format BI Clarify': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
+    'Fetch BI Opportunities': { main: [[{ node: 'Fetch BI Leads', type: 'main', index: 0 }]] },
+    'Fetch BI Leads': { main: [[{ node: 'Aggregate BI', type: 'main', index: 0 }]] },
+    'Aggregate BI': { main: [[{ node: 'BI Aggregate OK?', type: 'main', index: 0 }]] },
+    'BI Aggregate OK?': {
+      main: [
+        [{ node: 'BI Narrative', type: 'main', index: 0 }],
+        [{ node: 'Format BI Error', type: 'main', index: 0 }],
+      ],
+    },
+    'Format BI Error': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
+    'BI Narrative': { main: [[{ node: 'Format BI Response', type: 'main', index: 0 }]] },
+    'Format BI Response': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
+    // ---- RELVA BI サブグラフここまで ----
     'Query Planner': { main: [[{ node: 'Parse Query Plan', type: 'main', index: 0 }]] },
     'Parse Query Plan': { main: [[{ node: 'Search Account', type: 'main', index: 0 }]] },
     'Search Account': { main: [[{ node: 'Search Opportunity', type: 'main', index: 0 }]] },
@@ -849,7 +1436,11 @@ return [{ json: {
     'Tavily Search': { main: [[{ node: 'Merge Search Results', type: 'main', index: 0 }]] },
     'Merge Search Results': { main: [[{ node: 'Main AI', type: 'main', index: 0 }]] },
     'Main AI': { main: [[{ node: 'Format Response', type: 'main', index: 0 }]] },
-    'Format Response': { main: [[{ node: 'Save to Supabase', type: 'main', index: 0 }]] },
+    // Format Response(一般チャット経路)と Format BI Clarify/Response/Error(BI経路)の
+    // 4つの終端はすべて Prepare Final Response に合流させ、Respond to Webhook が参照する
+    // ノード名を1つに固定する(詳細は Prepare Final Response ノードのコメント参照)。
+    'Format Response': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
+    'Prepare Final Response': { main: [[{ node: 'Save to Supabase', type: 'main', index: 0 }]] },
     'Save to Supabase': { main: [[{ node: 'Respond to Webhook', type: 'main', index: 0 }]] },
   };
 

@@ -1,16 +1,11 @@
 import { formatApiError } from './chat';
 import { OPPORTUNITY_STAGE_OPTIONS } from '../apps/schema';
+import { aggregateByDimension, computeMetric } from '../semantic/aggregate';
+import type { KintoneRecordFields } from '../semantic/aggregate';
+import type { DimensionSeries } from '../semantic/templates';
+import { renderBarH } from './charts/barH';
 import { THEME } from './theme';
-import {
-  injectVizStyles,
-  renderKpiCards,
-  renderHBarRows,
-  renderMiniRankList,
-  renderVizError,
-  type KpiItem,
-  type HBarRow,
-  type MiniRankItem,
-} from './viz';
+import { injectVizStyles, renderKpiCards, renderMiniRankList, renderVizError, type KpiItem, type MiniRankItem } from './viz';
 
 const SPACE_DASHBOARD_CONFIG = {
   opportunityAppId: __OPPORTUNITY_APP_ID__,
@@ -18,8 +13,6 @@ const SPACE_DASHBOARD_CONFIG = {
   salesScoreAppId: __SALES_SCORE_APP_ID__,
 };
 
-const WON_STAGE = '成約';
-const LOST_STAGE = '失注';
 const AWAITING_LEAD_STATUS = '未対応';
 
 interface OpportunityRecord {
@@ -59,6 +52,7 @@ function injectSpaceDashboardStyles(): void {
   border: 1px solid ${THEME.mistLine}; padding: 16px; font-size: 13px; }
 .exh-space-dashboard-title { font-weight: 800; font-size: 15px; margin-bottom: 10px; color: ${THEME.soraDeep}; }
 .exh-space-dashboard-section-title { font-size: 12.5px; font-weight: 800; margin: 14px 0 8px; color: ${THEME.ink}; }
+.exh-space-dashboard-chart { width: 100%; height: 210px; }
 `;
   document.head.appendChild(style);
 }
@@ -105,7 +99,8 @@ export function getOrCreateSpaceWidgetRow(): HTMLElement {
 
 interface OpportunitySummary {
   kpis: KpiItem[];
-  rows: HBarRow[];
+  amountByStage: DimensionSeries[];
+  countByStage: Record<string, number>;
 }
 
 async function loadOpportunitySummary(): Promise<OpportunitySummary | null> {
@@ -117,42 +112,24 @@ async function loadOpportunitySummary(): Promise<OpportunitySummary | null> {
       fields: ['amount', 'stage'],
       query: 'limit 500',
     })) as { records: OpportunityRecord[] };
+    const records = result.records as unknown as KintoneRecordFields[];
 
-    const byStage = new Map<string, { count: number; amount: number }>();
-    for (const stage of OPPORTUNITY_STAGE_OPTIONS) byStage.set(stage, { count: 0, amount: 0 });
-
-    let total = 0;
-    let won = 0;
-    for (const record of result.records) {
-      const stage = record.stage?.value || '';
-      const amount = Number(record.amount?.value || 0);
-      total += amount;
-      if (stage === WON_STAGE) won += amount;
-      const bucket = byStage.get(stage);
-      if (bucket) {
-        bucket.count += 1;
-        bucket.amount += amount;
-      }
-    }
-
-    const maxAmount = Math.max(1, ...Array.from(byStage.values()).map((b) => b.amount));
-    const rows: HBarRow[] = OPPORTUNITY_STAGE_OPTIONS.map((stage) => {
-      const bucket = byStage.get(stage)!;
-      return {
-        label: stage,
-        amountLabel: formatYen(bucket.amount),
-        countLabel: `${bucket.count}件`,
-        pct: (bucket.amount / maxAmount) * 100,
-        tone: stage === WON_STAGE ? 'positive' : stage === LOST_STAGE ? 'negative' : undefined,
-      };
-    });
+    // RELVA BI (要件定義書 §6-3): フェーズ別の集計は semantic/aggregate.ts の共有関数を使う
+    // (このファイル自身では計算しない) — チャット経由のBI集計と同じ数式で二重管理を避ける。
+    const total = computeMetric(records, 'amount_sum');
+    const won = computeMetric(records, 'won_amount');
+    const amountByStage = aggregateByDimension(records, 'amount_sum', 'stage', OPPORTUNITY_STAGE_OPTIONS);
+    const countSeries = aggregateByDimension(records, 'count', 'stage', OPPORTUNITY_STAGE_OPTIONS);
+    const countByStage: Record<string, number> = {};
+    for (const s of countSeries) countByStage[s.key] = s.value;
 
     return {
       kpis: [
         { label: '案件総額', value: formatYen(total), sub: `全${result.records.length}件` },
         { label: '成約金額', value: formatYen(won), tone: 'accent' },
       ],
-      rows,
+      amountByStage,
+      countByStage,
     };
   } catch {
     return null;
@@ -236,8 +213,18 @@ async function render(container: HTMLElement): Promise<void> {
   if (!oppSummary) kpis.unshift({ label: '案件', value: '—', sub: '取得に失敗しました' });
   renderKpiCards(kpiEl, kpis);
 
-  if (oppSummary) renderHBarRows(pipelineEl, oppSummary.rows);
-  else renderVizError(pipelineEl, 'パイプラインの取得に失敗しました');
+  if (oppSummary) {
+    pipelineEl.className = 'exh-space-dashboard-chart';
+    renderBarH(pipelineEl, {
+      metric: { code: 'amount_sum', label: '金額合計', unit: '円' },
+      dimension: { code: 'stage', label: 'フェーズ' },
+      series: oppSummary.amountByStage,
+    }, {
+      tooltipExtra: (stage) => `件数: ${oppSummary.countByStage[stage] ?? 0}件`,
+    });
+  } else {
+    renderVizError(pipelineEl, 'パイプラインの取得に失敗しました');
+  }
 
   if (topAssignees === null) renderVizError(rankEl, '営業ランキングの取得に失敗しました');
   else if (topAssignees.length === 0) rankEl.innerHTML = '<div class="exh-viz-kpi-sub">スコアリング未実行</div>';

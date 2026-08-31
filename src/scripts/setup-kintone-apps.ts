@@ -7,10 +7,12 @@ import {
   ASSIGNEE_FIELDS,
   DAILY_ADVICE_FIELDS,
   LEAD_FIELDS,
+  LOSS_REASON_OPTIONS,
   MEETING_LOG_FIELDS,
   ROLEPLAY_SESSION_FIELDS,
   SALES_SCORE_FIELDS,
   buildOpportunityFields,
+  dropdownOptions,
 } from '../apps/schema';
 
 const APP_IDS_PATH = path.resolve(process.cwd(), 'app-ids.json');
@@ -116,6 +118,39 @@ async function main() {
       label: '提案書生成日時',
     },
   });
+
+  console.log('Ensuring exhibition_案件.loss_reason / industry fields exist (RELVA BI 要件定義書 §2) ...');
+  await kintone.ensureFields(opportunityAppId, {
+    loss_reason: {
+      type: 'DROP_DOWN',
+      code: 'loss_reason',
+      label: '失注理由',
+      options: dropdownOptions(LOSS_REASON_OPTIONS),
+    },
+    industry: {
+      type: 'SINGLE_LINE_TEXT',
+      code: 'industry',
+      label: '業種(取引先より自動転記)',
+    },
+  });
+
+  console.log('Updating exhibition_案件.account LOOKUP to copy industry (RELVA BI 要件定義書 §2 変更②) ...');
+  await kintone.updateFields(opportunityAppId, {
+    account: {
+      type: 'SINGLE_LINE_TEXT',
+      code: 'account',
+      label: '取引先',
+      lookup: {
+        relatedApp: { app: accountAppId },
+        relatedKeyField: 'company_name',
+        lookupPickerFields: ['company_name', 'industry', 'contact_name'],
+        fieldMappings: [{ field: 'industry', relatedField: 'industry' }],
+      },
+    },
+  });
+  console.log(
+    '   -> NOTE: existing records need a backfill for `industry` to populate. Run: npm run backfill:industry',
+  );
 
   console.log('6/8 Creating exhibition_商談ログ ...');
   const meetingLogAppId = await kintone.createAndDeployApp(

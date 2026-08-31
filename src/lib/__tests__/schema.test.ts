@@ -17,6 +17,7 @@ interface LookupField {
     relatedApp: { app: number };
     relatedKeyField: string;
     lookupPickerFields: string[];
+    fieldMappings?: { field: string; relatedField: string }[];
   };
 }
 
@@ -29,6 +30,15 @@ describe('buildOpportunityFields', () => {
     expect(account.lookup.relatedApp.app).toBe(42);
     expect(account.lookup.relatedKeyField).toBe('company_name');
     expect(account.lookup.lookupPickerFields).toContain('company_name');
+  });
+
+  it('copies 取引先.industry onto the opportunity record via fieldMappings (RELVA BI 要件定義書 §2)', () => {
+    const fields = buildOpportunityFields(42);
+    const account = fields.account as unknown as LookupField;
+
+    expect(account.lookup.fieldMappings).toEqual([{ field: 'industry', relatedField: 'industry' }]);
+    expect(fields.industry).toMatchObject({ type: 'SINGLE_LINE_TEXT' });
+    expect(fields.loss_reason).toMatchObject({ type: 'DROP_DOWN' });
   });
 
   it('produces a different lookup target per account app id', () => {

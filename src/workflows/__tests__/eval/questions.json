@@ -1,0 +1,94 @@
+[
+  {
+    "question": "今期の受注額はいくらですか?",
+    "expected": { "template": "T1", "metric": "won_amount" }
+  },
+  {
+    "question": "今月の成約件数を教えて",
+    "expected": { "template": "T1", "metric": "won_count" }
+  },
+  {
+    "question": "受注率はどれくらいですか?",
+    "expected": { "template": "T1", "metric": "win_rate" }
+  },
+  {
+    "question": "案件の平均金額はいくら?",
+    "expected": { "template": "T1", "metric": "amount_avg" }
+  },
+  {
+    "question": "先月の失注件数は?",
+    "expected": { "template": "T1", "metric": "lost_count" }
+  },
+  {
+    "question": "担当者別の受注額を見せて",
+    "expected": { "template": "T2", "metric": "amount_sum", "dimension": "owner" }
+  },
+  {
+    "question": "フェーズごとの案件件数を教えて",
+    "expected": { "template": "T4", "metric": "count" }
+  },
+  {
+    "question": "業種別の案件数はどうなっていますか?",
+    "expected": { "template": "T2", "metric": "count", "dimension": "industry" }
+  },
+  {
+    "question": "流入経路別のリード数を見せて",
+    "expected": { "template": "T2", "metric": "count", "dimension": "lead_source" }
+  },
+  {
+    "question": "リードステータス別の件数は?",
+    "expected": { "template": "T2", "metric": "count", "dimension": "lead_status" }
+  },
+  {
+    "question": "取引先ごとの受注額ランキングを見せて",
+    "expected": { "template": "T2", "metric": "won_amount", "dimension": "account" }
+  },
+  {
+    "question": "パイプラインの状況を教えて",
+    "expected": { "template": "T4" }
+  },
+  {
+    "question": "フェーズごとの金額の推移を見せて",
+    "expected": { "template": "T4", "metric": "amount_sum" }
+  },
+  {
+    "question": "失注理由を業種別に分析して",
+    "expected": { "template": "T5", "dimension": "loss_reason", "dimensionB": "industry" }
+  },
+  {
+    "question": "担当者ごとのフェーズ別件数をクロス集計して",
+    "expected": { "template": "T5", "dimension": "owner", "dimensionB": "stage" }
+  },
+  {
+    "question": "今月クロージング予定の案件一覧を見せて",
+    "expected": { "template": "T8" }
+  },
+  {
+    "question": "失注した案件の一覧を教えて",
+    "expected": { "template": "T8" }
+  },
+  {
+    "question": "リードの流入経路別に金額を見せて",
+    "expected": { "template": null, "needClarify": true }
+  },
+  {
+    "question": "分析して",
+    "expected": { "template": null }
+  },
+  {
+    "question": "山田製作所について教えて",
+    "expected": { "template": null, "needClarify": false }
+  },
+  {
+    "question": "新しい案件を登録したい",
+    "expected": { "template": null, "needClarify": false }
+  },
+  {
+    "question": "この案件を削除して",
+    "expected": { "template": null, "needClarify": false }
+  },
+  {
+    "question": "今日の天気は?",
+    "expected": { "template": null, "needClarify": false }
+  }
+]

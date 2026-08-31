@@ -1,6 +1,6 @@
 import type { KintoneFieldProperties } from '../lib/kintone-client';
 
-function dropdownOptions(labels: string[]): Record<string, { label: string; index: string }> {
+export function dropdownOptions(labels: string[]): Record<string, { label: string; index: string }> {
   return Object.fromEntries(labels.map((label, index) => [label, { label, index: String(index) }]));
 }
 
@@ -29,6 +29,9 @@ export const OPPORTUNITY_STAGE_OPTIONS = [
   '成約',
   '失注',
 ];
+// RELVA BI (要件定義書 §2 変更①) — only meaningful when stage=失注; used as a T5 cross-tab dimension
+// (失注理由×業種). Tentative list per the requirements doc, kept as-is per user confirmation.
+export const LOSS_REASON_OPTIONS = ['価格', '競合', 'タイミング', '予算凍結', 'ニーズ不一致', 'その他'];
 
 /** exhibition_取引先 (Account) — minimal first-pass schema; detailed field design deferred per requirements doc. */
 export const ACCOUNT_FIELDS: KintoneFieldProperties = {
@@ -141,6 +144,11 @@ export function buildOpportunityFields(accountAppId: number): KintoneFieldProper
         relatedApp: { app: accountAppId },
         relatedKeyField: 'company_name',
         lookupPickerFields: ['company_name', 'industry', 'contact_name'],
+        // RELVA BI (要件定義書 §2 変更②) — copies 取引先.industry onto this record so the
+        // semantic layer can aggregate opportunities by industry without a join. Only populates
+        // on record save/lookup-trigger, not retroactively — see src/scripts/backfill-industry.ts
+        // for existing records.
+        fieldMappings: [{ field: 'industry', relatedField: 'industry' }],
       },
     },
     amount: {
@@ -154,6 +162,21 @@ export function buildOpportunityFields(accountAppId: number): KintoneFieldProper
       label: 'フェーズ',
       options: dropdownOptions(OPPORTUNITY_STAGE_OPTIONS),
       defaultValue: '初期接触',
+    },
+    // RELVA BI (要件定義書 §2 変更②) — populated via the account LOOKUP's fieldMappings above.
+    // Not user-editable directly; kept as a plain SINGLE_LINE_TEXT so the semantic layer can filter
+    // /group by it exactly like 取引先.industry without a second DROP_DOWN options list to keep in sync.
+    industry: {
+      type: 'SINGLE_LINE_TEXT',
+      code: 'industry',
+      label: '業種(取引先より自動転記)',
+    },
+    // RELVA BI (要件定義書 §2 変更①) — only meaningful when stage=失注.
+    loss_reason: {
+      type: 'DROP_DOWN',
+      code: 'loss_reason',
+      label: '失注理由',
+      options: dropdownOptions(LOSS_REASON_OPTIONS),
     },
     close_date: {
       type: 'DATE',

@@ -1,75 +1,54 @@
 import { formatApiError } from './chat';
 import { OPPORTUNITY_STAGE_OPTIONS } from '../apps/schema';
-import { injectVizStyles, renderKpiCards, renderHBarRows, renderVizError, renderNote, type HBarRow } from './viz';
+import { aggregateByDimension, applyFilters, computeMetric } from '../semantic/aggregate';
+import type { KintoneRecordFields } from '../semantic/aggregate';
+import { renderBarH } from './charts/barH';
+import { injectVizStyles, renderKpiCards, renderVizError, renderNote } from './viz';
 
 const PIPELINE_CONFIG = {
   opportunityAppId: __OPPORTUNITY_APP_ID__,
 };
 
-const WON_STAGE = '成約';
-const LOST_STAGE = '失注';
-
-interface OpportunityRecord {
-  amount?: { value?: string };
-  stage?: { value?: string };
-}
-
-interface StageBucket {
-  count: number;
-  amount: number;
-}
+const CLOSED_STAGES = ['成約', '失注'];
 
 function formatYen(amount: number): string {
   return '¥' + Math.round(amount / 10000).toLocaleString('ja-JP') + '万';
 }
 
-async function fetchOpportunities(): Promise<OpportunityRecord[]> {
+async function fetchOpportunities(): Promise<KintoneRecordFields[]> {
   // Demo-scale dataset (a few dozen records) fits within kintone's single-request cap of 500 —
   // beyond that this would need an offset-paging loop like bulk-sync-pinecone.ts's.
   const result = (await kintone.api('/k/v1/records', 'GET', {
     app: Number(PIPELINE_CONFIG.opportunityAppId),
     fields: ['amount', 'stage'],
     query: 'limit 500',
-  })) as { records: OpportunityRecord[] };
+  })) as { records: KintoneRecordFields[] };
   return result.records;
 }
 
-function aggregate(records: OpportunityRecord[]) {
-  const byStage = new Map<string, StageBucket>();
-  for (const stage of OPPORTUNITY_STAGE_OPTIONS) byStage.set(stage, { count: 0, amount: 0 });
+// RELVA BI (要件定義書 §6-3): 集計は semantic/aggregate.ts の共有関数のみを使い、このファイル
+// 自身では計算しない — チャット経由のBI集計と同じ数式で二重管理を避ける。
+function aggregate(records: KintoneRecordFields[]) {
+  const pipelineRecords = applyFilters(records, [{ field: 'stage', op: 'not_in', value: CLOSED_STAGES }]);
+  const lostRecords = applyFilters(records, [{ field: 'stage', op: '=', value: '失注' }]);
 
-  let pipelineTotal = 0;
-  let pipelineCount = 0;
-  let wonTotal = 0;
-  let wonCount = 0;
-  let lostTotal = 0;
-  let lostCount = 0;
-  let allAmountSum = 0;
-  let allCount = 0;
+  const amountByStage = aggregateByDimension(records, 'amount_sum', 'stage', OPPORTUNITY_STAGE_OPTIONS);
+  const countSeries = aggregateByDimension(records, 'count', 'stage', OPPORTUNITY_STAGE_OPTIONS);
+  const countByStage: Record<string, number> = {};
+  for (const s of countSeries) countByStage[s.key] = s.value;
 
-  for (const record of records) {
-    const stage = record.stage?.value || '';
-    const amount = Number(record.amount?.value || 0);
-    const bucket = byStage.get(stage);
-    if (!bucket) continue;
-    bucket.count += 1;
-    bucket.amount += amount;
-
-    allAmountSum += amount;
-    allCount += 1;
-    if (stage === WON_STAGE) {
-      wonTotal += amount;
-      wonCount += 1;
-    } else if (stage === LOST_STAGE) {
-      lostTotal += amount;
-      lostCount += 1;
-    } else {
-      pipelineTotal += amount;
-      pipelineCount += 1;
-    }
-  }
-
-  return { byStage, pipelineTotal, pipelineCount, wonTotal, wonCount, lostTotal, lostCount, allAmountSum, allCount };
+  return {
+    pipelineTotal: computeMetric(pipelineRecords, 'amount_sum'),
+    pipelineCount: computeMetric(pipelineRecords, 'count'),
+    wonTotal: computeMetric(records, 'won_amount'),
+    wonCount: computeMetric(records, 'won_count'),
+    lostTotal: computeMetric(lostRecords, 'amount_sum'),
+    lostCount: computeMetric(records, 'lost_count'),
+    allAmountSum: computeMetric(records, 'amount_sum'),
+    allCount: computeMetric(records, 'count'),
+    amountByStage,
+    countByStage,
+  };
 }
 
 function render(container: HTMLElement, agg: ReturnType<typeof aggregate>): void {
@@ -80,6 +59,8 @@ function render(container: HTMLElement, agg: ReturnType<typeof aggregate>): void
   titleEl.className = 'exh-viz-panel-title';
   titleEl.textContent = 'フェーズ別パイプライン';
   const barsEl = document.createElement('div');
+  barsEl.style.width = '100%';
+  barsEl.style.height = '260px';
   const noteEl = document.createElement('div');
   panel.appendChild(titleEl);
   panel.appendChild(barsEl);
@@ -101,18 +82,15 @@ function render(container: HTMLElement, agg: ReturnType<typeof aggregate>): void
     { label: '失注', value: formatYen(agg.lostTotal), sub: `${agg.lostCount}件` },
   ]);
 
-  const maxAmount = Math.max(1, ...Array.from(agg.byStage.values()).map((b) => b.amount));
-  const rows: HBarRow[] = OPPORTUNITY_STAGE_OPTIONS.map((stage) => {
-    const bucket = agg.byStage.get(stage)!;
-    return {
-      label: stage,
-      amountLabel: formatYen(bucket.amount),
-      countLabel: `${bucket.count}件`,
-      pct: (bucket.amount / maxAmount) * 100,
-      tone: stage === WON_STAGE ? 'positive' : stage === LOST_STAGE ? 'negative' : undefined,
-    };
-  });
-  renderHBarRows(barsEl, rows);
+  renderBarH(
+    barsEl,
+    {
+      metric: { code: 'amount_sum', label: '金額合計', unit: '円' },
+      dimension: { code: 'stage', label: 'フェーズ' },
+      series: agg.amountByStage,
+    },
+    { tooltipExtra: (stage) => `件数: ${agg.countByStage[stage] ?? 0}件` },
+  );
 }
 
 async function loadAndRender(container: HTMLElement): Promise<void> {
