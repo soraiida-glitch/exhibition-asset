@@ -23,8 +23,8 @@ import { initProposal } from './proposal';
 import { initRecordSummary } from './record-summary';
 import { initRoleplay } from './roleplay';
 import { initSalesScoring } from './sales-scoring';
-import { getOrCreateSpaceWidgetRow, initSpaceDashboard } from './space-dashboard';
-import { THEME } from './theme';
+import { getOrCreateSpaceWidgetRow } from './space-dashboard';
+import { THEME, injectFontStyles } from './theme';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -170,6 +170,7 @@ function md2html(text: string): string {
 
 function injectStyles(): void {
   if (document.getElementById('exh-styles')) return;
+  injectFontStyles();
   const style = document.createElement('style');
   style.id = 'exh-styles';
   const t = THEME;
@@ -186,7 +187,8 @@ function injectStyles(): void {
 }
 #exh-panel { position: fixed; bottom: 100px; right: 24px; width: 400px; max-height: 72vh;
   background: ${t.cloud}; border-radius: 18px; box-shadow: 0 24px 60px -24px rgba(20,40,60,.35);
-  display: flex; flex-direction: column; z-index: 9999; overflow: hidden; border: 1px solid ${t.mistLine}; }
+  display: flex; flex-direction: column; z-index: 9999; overflow: hidden; border: 1px solid ${t.mistLine};
+  font-family: ${t.font}; }
 #exh-panel.exh-hidden { display: none; }
 #exh-header { background: linear-gradient(120deg, ${t.sora} 0%, ${t.soraDeep} 70%, #005872 130%);
   color: #fff; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; }
@@ -1177,10 +1179,9 @@ kintone.events.on(EVENTS, (event) => {
       buildUI();
       // Order matters: getOrCreateSpaceWidgetRow() appends children in call order, and the
       // dashboard is meant to render to the left of the daily-advice card.
-      initSpaceDashboard();
-      // RELVA BI 追加要件定義書 §5 — 6枚の初期ダッシュボード。既存のspace-dashboard(KPI/
-      // フェーズ別パイプライン/営業ランキング)とは別の並びのカードとして追加する
-      // (既に検証済みの既存表示に触れず、デグレさせないため)。
+      // RELVA BI 追加要件定義書 §5 の6枚の分析ダッシュボード(+ピン留めカード)が旧
+      // space-dashboard(案件総額/成約金額のKPI・フェーズ別パイプライン・営業ランキング)の
+      // 内容を完全に包含して置き換えたため、旧ダッシュボードは廃止した(二重表示を避けるため)。
       initBiDashboard();
       injectDailyAdviceCard();
     }

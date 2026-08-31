@@ -83,13 +83,10 @@ export async function runCustomizeSmokeTest(bundlePath: string): Promise<void> {
     throw new Error(`space.portal.show handler produced unhandled rejection(s): ${unhandled.map(String).join(', ')}`);
   }
 
-  const dashboard = window.document.getElementById('exh-space-dashboard');
-  if (!dashboard) {
-    throw new Error('space.portal.show ran without throwing, but #exh-space-dashboard was never inserted into the DOM.');
-  }
-  // RELVA BI 追加要件定義書 §5 — 6枚の初期ダッシュボードも同じ space.portal.show で必ず
-  // 一緒にマウントされる。この1行が無いと、既存ダッシュボードだけが動いて新しい方が
-  // 静かに死んでいても(例: 循環import・チャート描画の例外)このスモークテストは気付けない。
+  // RELVA BI 追加要件定義書 §5 — 6枚の分析ダッシュボード(+ピン留めカード)は space.portal.show
+  // で必ずマウントされる(旧#exh-space-dashboardは廃止済み——このダッシュボードに完全に
+  // 置き換わったため、二重表示にならないよう削除した)。この行が無いと、循環import・
+  // チャート描画の例外でダッシュボードが静かに死んでいてもこのスモークテストは気付けない。
   const biDashboard = window.document.getElementById('exh-bi-dashboard');
   if (!biDashboard) {
     throw new Error('space.portal.show ran without throwing, but #exh-bi-dashboard was never inserted into the DOM.');

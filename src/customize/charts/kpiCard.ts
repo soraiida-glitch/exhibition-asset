@@ -9,8 +9,8 @@ export function injectKpiCardStyles(): void {
   const style = document.createElement('style');
   style.id = 'exh-bi-kpi-styles';
   style.textContent = `
-.exh-bi-kpi { background: #fff; border: 1px solid ${THEME.mistLine}; border-radius: 14px; padding: 18px 20px; }
-.exh-bi-kpi-value { font-size: 30px; font-weight: 800; color: ${THEME.ink}; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.exh-bi-kpi { background: #fff; border: 1px solid ${THEME.mistLine}; border-radius: 14px; padding: 18px 20px; font-family: ${THEME.font}; }
+.exh-bi-kpi-value { font-family: ${THEME.fontDisplay}; font-size: 30px; font-weight: 700; color: ${THEME.ink}; font-variant-numeric: tabular-nums; line-height: 1.2; }
 .exh-bi-kpi-delta { font-size: 12.5px; font-weight: 700; margin-top: 6px; }
 .exh-bi-kpi-delta.exh-bi-up { color: #1c7a4c; }
 .exh-bi-kpi-delta.exh-bi-down { color: #d33333; }

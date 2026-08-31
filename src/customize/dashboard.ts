@@ -26,7 +26,7 @@ import type { BiResult, TemplateId } from '../semantic/templates';
 import { renderBiChart } from './bi-chat';
 import { formatApiError } from './chat';
 import { getOrCreateSpaceWidgetRow } from './space-dashboard';
-import { THEME } from './theme';
+import { THEME, injectFontStyles } from './theme';
 import { injectVizStyles, renderVizError } from './viz';
 
 const BI_DASHBOARD_CONFIG = {
@@ -50,15 +50,26 @@ function injectBiDashboardStyles(): void {
   const style = document.createElement('style');
   style.id = 'exh-bi-dashboard-styles';
   style.textContent = `
-#exh-bi-dashboard { flex: 0 0 420px; width: 420px; background: #fff; border-radius: 14px;
-  box-shadow: 0 12px 32px -16px rgba(20,40,60,.35); border: 1px solid ${THEME.mistLine}; padding: 16px; font-size: 13px; }
+/* 横に空いているスペースを活かすため、縦1列積みではなく3列グリッドで並べる
+   (ユーザーフィードバック: 「空いているスペースを有効活用したい」)。 */
+#exh-bi-dashboard { flex: 0 0 auto; width: min(900px, 100%); background: #fff; border-radius: 14px;
+  box-shadow: 0 12px 32px -16px rgba(20,40,60,.35); border: 1px solid ${THEME.mistLine}; padding: 16px; font-size: 13px;
+  font-family: ${THEME.font}; }
 .exh-bi-dashboard-title { font-weight: 800; font-size: 15px; margin-bottom: 10px; color: ${THEME.soraDeep}; }
-.exh-bi-dashboard-grid { display: flex; flex-direction: column; gap: 14px; }
-.exh-bi-dashboard-card { border: 1px solid ${THEME.mistLine}; border-radius: 10px; padding: 10px 12px; }
+.exh-bi-dashboard-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+/* 幅が狭い画面(モバイル等)では列数を落として潰れないようにする。 */
+@media (max-width: 720px) { .exh-bi-dashboard-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .exh-bi-dashboard-grid { grid-template-columns: 1fr; } }
+/* 「📌 ピン留めされたカード」の見出し行はカード1枚分ではなく、グリッド全体の幅いっぱいに
+   広げる(グリッド内の1セルとして扱われると、見出しが小さな1コマに収まってしまうため)。 */
+.exh-bi-dashboard-section-title { grid-column: 1 / -1; font-weight: 800; font-size: 13px; color: ${THEME.soraDeep};
+  margin-top: 4px; }
+.exh-bi-dashboard-card { border: 1px solid ${THEME.mistLine}; border-radius: 10px; padding: 10px 12px; min-width: 0; }
 .exh-bi-dashboard-card-title { font-size: 12.5px; font-weight: 800; color: ${THEME.ink}; margin-bottom: 6px; }
-/* renderBiChart() の既定サイズ(220px/260px)はチャット用——ダッシュボードは6枚並ぶため縮める。 */
-#exh-bi-dashboard .exh-bi-chart-host { height: 150px; }
-#exh-bi-dashboard .exh-bi-chart-host.exh-bi-chart-tall { height: 190px; }
+/* renderBiChart() の既定サイズ(220px/260px)はチャット用——ダッシュボードは3列グリッドの
+   幅の狭いカードに収めるため縮める。 */
+#exh-bi-dashboard .exh-bi-chart-host { height: 140px; }
+#exh-bi-dashboard .exh-bi-chart-host.exh-bi-chart-tall { height: 170px; }
 .exh-bi-dashboard-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .exh-bi-dashboard-ask-btn, .exh-bi-dashboard-unpin-btn { border: 1px solid ${THEME.mistLine}; background: ${THEME.cloud};
   color: ${THEME.soraDeep}; font-size: 11.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
@@ -244,7 +255,7 @@ async function render(container: HTMLElement): Promise<void> {
 
   if (pinnedCards.length > 0) {
     const pinnedTitleEl = document.createElement('div');
-    pinnedTitleEl.className = 'exh-bi-dashboard-card-title';
+    pinnedTitleEl.className = 'exh-bi-dashboard-section-title';
     pinnedTitleEl.textContent = '📌 ピン留めされたカード';
     grid.appendChild(pinnedTitleEl);
 
@@ -256,6 +267,7 @@ async function render(container: HTMLElement): Promise<void> {
 }
 
 export function initBiDashboard(): void {
+  injectFontStyles();
   injectVizStyles();
   injectBiDashboardStyles();
   if (document.getElementById('exh-bi-dashboard')) return;
