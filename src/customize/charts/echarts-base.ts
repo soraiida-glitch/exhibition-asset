@@ -55,14 +55,20 @@ export type EChartsOption = echarts.ComposeOption<
   | VisualMapComponentOption
 >;
 
-/** 単色アクセント+グレーのみ。カテゴリが増えても虹色にせず、濃淡で区別する。 */
+/**
+ * 単色アクセント+グレーのみ。カテゴリが増えても虹色にせず、濃淡(1つの色相の階調)で区別する。
+ * 8段階(業種8区分・担当者6名などをカバー)——5段階だった旧配列は、8区分あるドーナツで
+ * 色が循環して2区分が同じ色になったり、末尾2色(mistLine/mist)が白背景にほぼ溶け込んで
+ * 見分けが付かなくなる実害があったため拡張した。全段階とも白背景に対して視認できる濃さを
+ * 保つ(最も薄い段階でも#b8dae2程度に留め、mist(#d8ecf0)のような白に近すぎる色は使わない)。
+ */
 export const CHART_COLORS = {
   primary: THEME.sora,
   primaryDeep: THEME.soraDeep,
   warn: THEME.hinode,
   grid: THEME.mistLine,
   label: '#5a6b7a',
-  neutralSteps: [THEME.soraDeep, THEME.sora, '#5aa9bd', THEME.mistLine, THEME.mist],
+  neutralSteps: ['#00434f', THEME.soraDeep, THEME.sora, '#2ba9c4', '#5aa9bd', '#7cc0d3', '#9ecfdc', '#b8dae2'],
 } as const;
 
 export function initChart(container: HTMLElement): EChartsInstance {
