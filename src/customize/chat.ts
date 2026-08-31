@@ -5,6 +5,7 @@ import {
   LEAD_STATUS_OPTIONS,
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
+import type { ChatCardState } from '../semantic/cards';
 import type { BiResult } from '../semantic/templates';
 import { escHtml } from './html-utils';
 // 既存の `import { escHtml } from './chat'` を壊さないための re-export。中身は html-utils.ts
@@ -54,6 +55,9 @@ interface AgentResponse {
   prefill?: Record<string, unknown>;
   /** RELVA BI (要件定義書) — n8n の Format BI Response が設定する。ある場合のみチャートを描画する。 */
   biResult?: BiResult;
+  /** RELVA BI 追加要件定義書 §3/§4 — 「直前に表示したカード」。次のリファイン/ナレーション
+   *  リクエストに currentCard として載せて送り返すことで、ルーターが会話の続きだと判断できる。 */
+  cardSpec?: ChatCardState;
 }
 
 interface MeishiResult {
@@ -149,6 +153,10 @@ const EXHIBITION_SPACE_ID = '2';
 const SESSION_ID = genId();
 const conversationHistory: ChatMessage[] = [];
 let lastKintoneContext: KintoneContextRef | null = null;
+// RELVA BI 追加要件定義書 §4: 直前に表示したカード(query/refine/narrateのどれで出たかは
+// 問わない)。ルーターがrefine/narrateを判定するための唯一の手がかりなので、セッション中は
+// ここでしか保持しない(Supabaseへの永続化はピン留めされたカードだけ——§3-3・§7)。
+let currentCard: ChatCardState | null = null;
 let msgSeq = 0;
 
 function md2html(text: string): string {
@@ -469,6 +477,13 @@ function pushAI(text: string, data?: AgentResponse, question?: string): string {
     renderBiResult(biContainer, data.biResult, (routerQuery) => void handleSend(routerQuery));
   }
 
+  // このメッセージがカードを1枚出したなら「直前のカード」を更新する。BIの質問ではない
+  // 一般チャットの応答にはcardSpecが付かないため、その場合は前のカードをそのまま維持する
+  // (「これについて教えて」のような後続質問が直前のBI応答を指し続けられるようにするため)。
+  if (data?.cardSpec) {
+    currentCard = data.cardSpec;
+  }
+
   getMsgsEl().appendChild(el);
   scrollToBottom();
 
@@ -775,6 +790,7 @@ async function handleSend(text: string): Promise<void> {
         recordId,
         history: conversationHistory.slice(-12),
         lastKintoneContext,
+        currentCard,
       }),
     );
 

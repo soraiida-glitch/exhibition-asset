@@ -44,6 +44,10 @@
     "expected": { "template": "T2", "metric": "won_amount", "dimension": "account" }
   },
   {
+    "question": "業種別の受注率を見せて",
+    "expected": { "template": "T2", "metric": "win_rate", "dimension": "industry" }
+  },
+  {
     "question": "パイプラインの状況を教えて",
     "expected": { "template": "T4" }
   },

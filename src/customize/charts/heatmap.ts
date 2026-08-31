@@ -1,4 +1,5 @@
 import type { PayloadFor } from '../../semantic/templates';
+import { formatMetricNumber } from '../format-utils';
 import { CHART_COLORS, renderChart } from './echarts-base';
 
 function uniqueInOrder(values: string[]): string[] {
@@ -40,7 +41,7 @@ export function renderHeatmap(container: HTMLElement, payload: PayloadFor<'T5'>)
         const col = colLabels[point.data[0]];
         const row = rowLabels[point.data[1]];
         const value = point.data[2];
-        return `${row} × ${col}<br/>${payload.metric.label}: ${value.toLocaleString('ja-JP')}${payload.metric.unit}`;
+        return `${row} × ${col}<br/>${payload.metric.label}: ${formatMetricNumber(value, payload.metric.unit)}`;
       },
     },
     xAxis: {
@@ -73,7 +74,7 @@ export function renderHeatmap(container: HTMLElement, payload: PayloadFor<'T5'>)
           show: true,
           color: '#14233a',
           fontWeight: 700,
-          formatter: (p) => String((p.data as number[])[2]),
+          formatter: (p) => formatMetricNumber((p.data as number[])[2], payload.metric.unit),
         },
         emphasis: { itemStyle: { shadowBlur: 6, shadowColor: 'rgba(0,0,0,.2)' } },
       },

@@ -5,6 +5,7 @@ import {
   aggregateEmbeddable,
   aggregateFunnel,
   applyFilters,
+  buildFactSheet,
   buildInterpretation,
   computeMetric,
   runAggregate,
@@ -236,6 +237,39 @@ describe('DIMENSION_FIELD_MAP drift guard', () => {
       });
       expect(result.ok, `dimension ${code} should be supported by runAggregate`).toBe(true);
     }
+  });
+});
+
+describe('buildFactSheet (narrateとquery/refineの両方で共用する表示整形)', () => {
+  it('formats T1 in 万円 notation, never the raw yen figure (regression: LLM once mis-converted this itself)', () => {
+    const factSheet = buildFactSheet('T1', 'won_amount', '受注額', { value: 8_150_000 });
+    expect(factSheet).toBe('受注額: 約815万円');
+    expect(factSheet).not.toMatch(/8,150,000|8150000/);
+  });
+
+  it('formats T2 series with each key/value pair', () => {
+    const factSheet = buildFactSheet('T2', 'count', '担当者別', {
+      series: [
+        { key: '飯田', value: 12 },
+        { key: '佐藤', value: 8 },
+      ],
+    });
+    expect(factSheet).toBe('飯田: 12件、佐藤: 8件');
+  });
+
+  it('formats T5 matrix, skipping zero-value cells', () => {
+    const factSheet = buildFactSheet('T5', 'count', '失注理由×業種', {
+      matrix: [
+        { row: '価格', col: '製造', value: 5 },
+        { row: '価格', col: 'IT', value: 0 },
+      ],
+    });
+    expect(factSheet).toBe('価格×製造: 5件');
+  });
+
+  it('formats win_rate as a percentage with one decimal, not a 0-1 fraction', () => {
+    const factSheet = buildFactSheet('T1', 'win_rate', '受注率', { value: 50 });
+    expect(factSheet).toBe('受注率: 50.0%');
   });
 });
 

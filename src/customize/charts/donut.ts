@@ -1,4 +1,5 @@
 import type { PayloadFor } from '../../semantic/templates';
+import { formatMetricNumber } from '../format-utils';
 import { CHART_COLORS, renderChart } from './echarts-base';
 
 /** T2(カテゴリ別集計)の「全体に占める割合」表示。カテゴリ数が多い/ランキング目的なら BarH を使う。 */
@@ -9,7 +10,7 @@ export function renderDonut(container: HTMLElement, payload: PayloadFor<'T2'>): 
     color: [...CHART_COLORS.neutralSteps],
     tooltip: {
       trigger: 'item',
-      valueFormatter: (v) => `${Number(v).toLocaleString('ja-JP')}${payload.metric.unit}`,
+      valueFormatter: (v) => formatMetricNumber(Number(v), payload.metric.unit),
     },
     legend: {
       orient: 'vertical',
@@ -36,7 +37,7 @@ export function renderDonut(container: HTMLElement, payload: PayloadFor<'T2'>): 
         left: '38%',
         top: '50%',
         style: {
-          text: `${total.toLocaleString('ja-JP')}\n${payload.metric.unit}`,
+          text: formatMetricNumber(total, payload.metric.unit),
           textAlign: 'center',
           textVerticalAlign: 'middle',
           fill: CHART_COLORS.label,

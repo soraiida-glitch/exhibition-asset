@@ -271,6 +271,10 @@ export interface RunAggregateParams {
   dimension?: DimensionCode;
   dimensionB?: DimensionCode;
   filters?: FilterSpec[];
+  /** T1/T8はdimensionを持たないため対象(案件/リード)をdimensionのtargetAppから推測できない
+   * ——「対応待ちリード件数」のような、次元なしでリードを対象にしたいカードのために明示する。
+   * 省略時は従来どおり dimension の targetApp から判定し、それも無ければ案件を対象にする。 */
+  entity?: 'opportunity' | 'lead';
 }
 
 export interface RunAggregateInput {
@@ -294,11 +298,12 @@ export function runAggregate(input: RunAggregateInput, params: RunAggregateParam
   if (params.dimension && !dim) {
     return { ok: false, message: `未対応のディメンションです: ${params.dimension}` };
   }
-  if (dim && dim.targetApp === 'lead' && params.metric !== 'count') {
+  const targetsLead = params.entity ? params.entity === 'lead' : dim?.targetApp === 'lead';
+  if (targetsLead && params.metric !== 'count') {
     return { ok: false, message: 'リードの分析では件数のみ集計できます' };
   }
 
-  const baseRecords = dim && dim.targetApp === 'lead' ? input.leadRecords : input.opportunityRecords;
+  const baseRecords = targetsLead ? input.leadRecords : input.opportunityRecords;
   const filtered = applyFilters(baseRecords, filters);
 
   switch (params.template) {
@@ -335,11 +340,14 @@ export function runAggregate(input: RunAggregateInput, params: RunAggregateParam
       return { ok: true, template: 'T5', data: cross };
     }
     case 'T8': {
-      const columns = ['deal_name', 'account', 'amount', 'stage', 'owner', 'close_date'];
+      const columns = targetsLead
+        ? ['lead_name', 'company_name', 'source', 'status']
+        : ['deal_name', 'account', 'amount', 'stage', 'owner', 'close_date'];
+      const numericColumns = new Set(targetsLead ? [] : ['amount']);
       const records = filtered.slice(0, 50).map((r) => {
         const row: Record<string, string> = {};
         for (const c of columns) {
-          row[c] = c === 'amount' ? String(fieldNum(r, c)) : fieldStr(r, c);
+          row[c] = numericColumns.has(c) ? String(fieldNum(r, c)) : fieldStr(r, c);
         }
         row.$id = fieldStr(r, '$id');
         return row;
@@ -349,6 +357,57 @@ export function runAggregate(input: RunAggregateInput, params: RunAggregateParam
     default:
       return { ok: false, message: `未対応のテンプレートです: ${params.template}` };
   }
+}
+
+const METRIC_UNITS: Record<string, string> = {
+  count: '件',
+  amount_sum: '円',
+  amount_avg: '円',
+  won_amount: '円',
+  won_count: '件',
+  lost_count: '件',
+  win_rate: '%',
+};
+
+/** ナレーションLLMに渡す表示用文字列を決定的に整形する。円は万円表記に丸め、%は小数第1位まで
+ * ——LLM自身に単位変換を計算させると桁を間違える(実際に本番で発生した事故)。 */
+function formatMetricValueForFactSheet(metric: string, value: number): string {
+  const unit = METRIC_UNITS[metric] || '';
+  if (unit === '円') return '約' + Math.round(value / 10000).toLocaleString('ja-JP') + '万円';
+  if (unit === '%') return value.toFixed(1) + '%';
+  return value.toLocaleString('ja-JP') + unit;
+}
+
+/**
+ * RELVA BI 追加要件定義書 §4 narrate — ナレーションLLMに渡す「引用してよい事実だけを並べた
+ * 文字列」を、BiResult.data(表示スケール済み・runAggregateの結果そのまま)から組み立てる。
+ * query/refine(新規集計の直後)でも、narrate(既存カードのdataを再利用するだけ)でも同じ関数を
+ * 呼ぶ——data の形はどちらの経路でも同じ PayloadFor<T> なので分岐する必要がない。
+ */
+export function buildFactSheet(template: string, metric: string | undefined, title: string, data: Record<string, unknown>): string {
+  if (template === 'T1') {
+    return `${title}: ${formatMetricValueForFactSheet(metric || '', data.value as number)}`;
+  }
+  if (template === 'T2') {
+    const series = data.series as { key: string; value: number }[];
+    return series.map((s) => `${s.key}: ${formatMetricValueForFactSheet(metric || '', s.value)}`).join('、');
+  }
+  if (template === 'T4') {
+    const steps = data.steps as { stage: string; value: number }[];
+    return steps.map((s) => `${s.stage}: ${formatMetricValueForFactSheet(metric || '', s.value)}`).join('、');
+  }
+  if (template === 'T5') {
+    const matrix = data.matrix as { row: string; col: string; value: number }[];
+    return matrix
+      .filter((m) => m.value > 0)
+      .map((m) => `${m.row}×${m.col}: ${formatMetricValueForFactSheet(metric || '', m.value)}`)
+      .join('、');
+  }
+  if (template === 'T8') {
+    const records = data.records as Record<string, string>[];
+    return `${records.length}件: ${records.map((r) => r.deal_name).join('、')}`;
+  }
+  return '';
 }
 
 /**
@@ -366,6 +425,7 @@ export function aggregateEmbeddable(): string {
     `const DIMENSION_FIELD_MAP = ${JSON.stringify(DIMENSION_FIELD_MAP)};`,
     `const METRIC_LABELS = ${JSON.stringify(METRIC_LABELS)};`,
     `const DIMENSION_LABELS = ${JSON.stringify(DIMENSION_LABELS)};`,
+    `const METRIC_UNITS = ${JSON.stringify(METRIC_UNITS)};`,
   ];
   const fns = [
     fieldStr,
@@ -379,6 +439,8 @@ export function aggregateEmbeddable(): string {
     aggregateCrossTab,
     buildInterpretation,
     runAggregate,
+    formatMetricValueForFactSheet,
+    buildFactSheet,
   ].map((fn) => fn.toString());
   return [shim, ...consts, ...fns].join('\n');
 }

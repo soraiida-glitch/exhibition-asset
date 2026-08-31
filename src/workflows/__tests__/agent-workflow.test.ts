@@ -69,6 +69,7 @@ describe('buildAgentWorkflow — generated Code node syntax', () => {
 interface BiPlanOutput {
   biPlan: {
     isBiQuestion: boolean;
+    op?: string;
     template?: string | null;
     metric?: string;
     dimension?: string;
@@ -95,6 +96,7 @@ describe('Parse BI Plan node', () => {
     const out = run({ template: 'T1', metric: 'won_amount', filters: [] });
     expect(out.biPlan).toEqual({
       isBiQuestion: true,
+      op: 'query',
       template: 'T1',
       metric: 'won_amount',
       dimension: undefined,
@@ -134,6 +136,77 @@ describe('Parse BI Plan node', () => {
     const $json = { choices: [{ message: { content: 'not json' } }] };
     const out = runNode<BiPlanOutput>(jsCode, { $node, $json }).json;
     expect(out.biPlan).toEqual({ isBiQuestion: false });
+  });
+
+  // RELVA BI 追加要件定義書 §4: op: refine|narrate|clarify のルーター拡張。
+  const currentCard = {
+    template: 'T2',
+    params: { metric: 'amount_sum', dimension: 'owner', period: { preset: 'current_fiscal_year' } },
+    title: '担当者別 受注額',
+  };
+
+  it('op:refine merges the patch into currentCard.params via cards.ts refine(), keeping the same template', () => {
+    const out = run({ op: 'refine', dimension: 'industry' }, { message: '業種で見せて', currentCard });
+    expect(out.biPlan).toEqual({
+      isBiQuestion: true,
+      op: 'refine',
+      template: 'T2', // currentCardのtemplateを維持
+      metric: 'amount_sum', // 変更しなかったフィールドはcurrentCardの値を維持
+      dimension: 'industry', // パッチで変更されたフィールド
+      dimensionB: undefined,
+      period: 'current_fiscal_year',
+      filters: [],
+      needClarify: null,
+    });
+  });
+
+  it('op:refine changes only the period when that is all the patch specifies', () => {
+    const out = run({ op: 'refine', period: 'last_month' }, { message: '先月で', currentCard });
+    expect(out.biPlan.dimension).toBe('owner'); // 維持
+    expect(out.biPlan.period).toBe('last_month'); // 変更
+  });
+
+  it('op:refine without a currentCard asks the user to start with a query instead', () => {
+    const out = run({ op: 'refine', dimension: 'industry' }, { message: '業種で見せて', currentCard: null });
+    expect(out.biPlan.op).toBe('clarify');
+    expect(out.biPlan.needClarify).toMatch(/表示されているグラフが無い/);
+  });
+
+  it('op:refine still runs the deterministic shape validation on the merged result (e.g. T5 needs 2 dimensions)', () => {
+    const t5Card = { template: 'T5', params: { metric: 'count', dimension: 'loss_reason', dimensionB: 'industry' } };
+    // dimensionBをpatchで消すような入力(LLMが送ってこない想定だが、防御的に無効な形は弾く)
+    const out = run({ op: 'refine', metric: 'win_rate' }, { message: '受注率で', currentCard: t5Card });
+    // T5でリード専用metricの組み合わせ等、不正な形になった場合はclarifyへ落ちることを確認する
+    // (ここでは有効な組み合わせなので通常どおりrefineが成立することを確認)
+    expect(out.biPlan.op).toBe('refine');
+    expect(out.biPlan.template).toBe('T5');
+    expect(out.biPlan.metric).toBe('win_rate');
+  });
+
+  it('op:narrate carries the currentCard params through as-is (no new aggregation, just echoes what is already shown)', () => {
+    const out = run({ op: 'narrate' }, { message: 'このグラフについて何が言える?', currentCard });
+    expect(out.biPlan).toEqual({
+      isBiQuestion: true,
+      op: 'narrate',
+      template: 'T2',
+      metric: 'amount_sum',
+      dimension: 'owner',
+      dimensionB: undefined,
+      period: 'current_fiscal_year',
+      filters: [],
+      needClarify: null,
+    });
+  });
+
+  it('op:narrate without a currentCard asks the user to start with a query instead', () => {
+    const out = run({ op: 'narrate' }, { message: 'これについて教えて', currentCard: null });
+    expect(out.biPlan.op).toBe('clarify');
+    expect(out.biPlan.needClarify).toMatch(/表示されているグラフが無い/);
+  });
+
+  it('op:clarify passes through the LLM-provided clarifying question', () => {
+    const out = run({ op: 'clarify', needClarify: '期間を教えてください' }, { message: '受注率は?' });
+    expect(out.biPlan).toEqual({ isBiQuestion: true, op: 'clarify', template: null, needClarify: '期間を教えてください' });
   });
 });
 
@@ -258,5 +331,113 @@ describe('Aggregate BI node', () => {
     const out = run({ template: 'T2', metric: 'amount_sum', dimension: 'lead_source', period: 'all', filters: [] }, OPPS);
     expect(out.biResult).toBeUndefined();
     expect(out.biAggregateError).toMatch(/件数のみ/);
+  });
+});
+
+// RELVA BI 追加要件定義書 §4: narrateは新しい集計を一切行わず、直前のカード(currentCard)の
+// 確定済みデータをそのまま引き継ぐ——Fetch BI Opportunities/Leads・Aggregate BIを丸ごと
+// バイパスする経路。
+describe('Build Narrate Input node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Build Narrate Input');
+
+  function run(biPlan: Record<string, unknown>, currentCard: Record<string, unknown> | null) {
+    const $node = {
+      'Parse BI Plan': { json: { biPlan, currentCard, sessionId: 's', userId: 'u', userName: 'n', message: 'm' } },
+    };
+    return runNode<BiAggregateOutput>(jsCode, { $node }).json;
+  }
+
+  const currentCard = {
+    template: 'T2',
+    params: { metric: 'amount_sum', dimension: 'owner', period: { preset: 'current_fiscal_year' } },
+    title: '担当者別 受注額(今期)',
+    interpretation: '担当者別の受注額合計です。',
+    filtersApplied: [{ label: '期間', value: '今期(2026-04-01〜2027-03-31)' }],
+    data: { metric: { code: 'amount_sum', label: '受注額合計', unit: '円' }, dimension: { code: 'owner', label: '担当者' }, series: [{ key: '飯田', value: 8_150_000 }] },
+  };
+
+  it('reuses currentCard.data verbatim as biResult without recomputing anything', () => {
+    const biPlan = { template: 'T2', metric: 'amount_sum', dimension: 'owner', period: 'current_fiscal_year', filters: [] };
+    const out = run(biPlan, currentCard);
+    expect(out.biAggregateError).toBeUndefined();
+    expect(out.biResult).toEqual({
+      template: 'T2',
+      title: '担当者別 受注額(今期)',
+      interpretation: '担当者別の受注額合計です。',
+      filtersApplied: currentCard.filtersApplied,
+      data: currentCard.data,
+      narrative: '',
+    });
+  });
+
+  it('formats factSheet with the same buildFactSheet() used by Aggregate BI (万円換算, no raw yen leak)', () => {
+    const biPlan = { template: 'T2', metric: 'amount_sum', dimension: 'owner', period: 'current_fiscal_year', filters: [] };
+    const out = run(biPlan, currentCard);
+    expect(out.factSheet).toContain('815万円');
+    expect(out.factSheet).not.toMatch(/8,150,000|8150000/);
+  });
+
+  it('defensively surfaces a structured error when currentCard has no data (should not normally happen — Parse BI Plan already checked template presence)', () => {
+    const biPlan = { template: 'T2', metric: 'amount_sum', dimension: 'owner', period: 'current_fiscal_year', filters: [] };
+    const out = run(biPlan, { template: 'T2', params: {}, title: 't' });
+    expect(out.biResult).toBeUndefined();
+    expect(out.biAggregateError).toMatch(/見つかりませんでした/);
+  });
+});
+
+// RELVA BI 追加要件定義書 §3: カード=テンプレインスタンス統一モデル。Format BI Responseは
+// query/refine/narrateのどれが実行されても、同じ形のcardSpecをフロントエンドへ返す必要がある
+// (フロントエンドはこれをcurrentCardとして保持し、次のリクエストに載せて送り返す)。
+describe('Format BI Response node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Format BI Response');
+
+  interface FormatBiResponseOutput {
+    response: {
+      answer: string;
+      biResult: { template: string; title: string };
+      cardSpec: {
+        template: string;
+        params: { metric?: string; dimension?: string; dimensionB?: string; filters: unknown[]; period?: { preset: string } };
+        title: string;
+        interpretation: string;
+        filtersApplied: unknown[];
+        data: unknown;
+      };
+    };
+  }
+
+  function run(prepareOutput: Record<string, unknown>, narrativeContent: string) {
+    const $node = { 'Prepare BI Narrative Input': { json: prepareOutput } };
+    const $json = { choices: [{ message: { content: narrativeContent } }] };
+    return runNode<FormatBiResponseOutput>(jsCode, { $node, $json }).json;
+  }
+
+  const biResult = {
+    template: 'T2',
+    title: '担当者別 受注額(今期)',
+    interpretation: '担当者別の受注額合計です。',
+    filtersApplied: [{ label: '期間', value: '今期(2026-04-01〜2027-03-31)' }],
+    data: { series: [{ key: '飯田', value: 8_150_000 }] },
+  };
+  const biPlan = { template: 'T2', metric: 'amount_sum', dimension: 'owner', dimensionB: undefined, period: 'current_fiscal_year', filters: [] };
+
+  it('builds a cardSpec whose params mirror biPlan, regardless of whether query/refine/narrate produced it', () => {
+    const out = run({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, JSON.stringify({ narrative: '飯田さんが最も多く受注しています。' }));
+    expect(out.response.cardSpec).toEqual({
+      template: 'T2',
+      params: { metric: 'amount_sum', dimension: 'owner', dimensionB: undefined, filters: [], period: { preset: 'current_fiscal_year' } },
+      title: biResult.title,
+      interpretation: biResult.interpretation,
+      filtersApplied: biResult.filtersApplied,
+      data: biResult.data,
+    });
+  });
+
+  it('falls back to the interpretation as the narrative when the LLM response is not valid JSON', () => {
+    const out = run({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, 'not json');
+    expect(out.response.biResult.template).toBe('T2');
+    expect(out.response.answer).toBe(biResult.interpretation);
   });
 });

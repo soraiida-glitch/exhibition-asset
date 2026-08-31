@@ -1,4 +1,5 @@
 import type { PayloadFor } from '../../semantic/templates';
+import { formatMetricNumber } from '../format-utils';
 import { CHART_COLORS, renderChart } from './echarts-base';
 
 /** T4(パイプライン/ファネル)。ステップの順序は semantic/aggregate.ts の aggregateFunnel が既に確定させている。 */
@@ -6,7 +7,7 @@ export function renderFunnel(container: HTMLElement, payload: PayloadFor<'T4'>):
   return renderChart(container, {
     tooltip: {
       trigger: 'item',
-      valueFormatter: (v) => `${Number(v).toLocaleString('ja-JP')}${payload.metric.unit}`,
+      valueFormatter: (v) => formatMetricNumber(Number(v), payload.metric.unit),
     },
     series: [
       {
@@ -24,7 +25,7 @@ export function renderFunnel(container: HTMLElement, payload: PayloadFor<'T4'>):
           color: '#fff',
           fontWeight: 700,
           fontSize: 12,
-          formatter: (p) => `${p.name}  ${Number(p.value).toLocaleString('ja-JP')}`,
+          formatter: (p) => `${p.name}  ${formatMetricNumber(Number(p.value), payload.metric.unit)}`,
         },
         itemStyle: { borderColor: '#fff', borderWidth: 1 },
         color: [...CHART_COLORS.neutralSteps],

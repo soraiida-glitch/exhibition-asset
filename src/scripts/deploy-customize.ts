@@ -11,6 +11,25 @@ const VITE_BIN = path.resolve(process.cwd(), 'node_modules/vite/bin/vite.js');
 const BUNDLE_PATH = path.resolve(process.cwd(), 'dist/customize/chat.js');
 const THEME_CSS_PATH = path.resolve(process.cwd(), 'src/customize/kintone-theme.css');
 
+// kintone's own file/customize endpoints have been observed returning transient 500/520 errors
+// (CB_BL01 "Blobサービスにアクセスできません", GAIA_CS02, plain 504 gateway timeouts) that clear
+// up on their own within minutes — not something our code can fix, but worth absorbing with a
+// retry instead of making a human re-run this whole script by hand every time it happens.
+async function withRetry<T>(label: string, fn: () => Promise<T>, delaysMs = [3000, 8000, 20000]): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= delaysMs.length) throw err;
+      const delay = delaysMs[attempt];
+      console.warn(
+        `   ! ${label} failed (attempt ${attempt + 1}/${delaysMs.length + 1}), retrying in ${delay / 1000}s: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function main() {
   const env = loadEnv();
 
@@ -56,47 +75,51 @@ async function main() {
   // within one customize.json call (desktop.js + mobile.js), fails with GAIA_DC04 "duplicate
   // fileKey". Each attachment point needs its own fresh upload.
   for (const target of jsAndCssTargets) {
-    console.log(`Uploading chat.js + kintone-theme.css for ${target.label} ...`);
-    const desktopJsKey = await kintone.uploadFile('chat.js', bundle);
-    const mobileJsKey = await kintone.uploadFile('chat.js', bundle);
-    const desktopCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
-    const mobileCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
+    await withRetry(`deploy to ${target.label}`, async () => {
+      console.log(`Uploading chat.js + kintone-theme.css for ${target.label} ...`);
+      const desktopJsKey = await kintone.uploadFile('chat.js', bundle);
+      const mobileJsKey = await kintone.uploadFile('chat.js', bundle);
+      const desktopCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
+      const mobileCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
 
-    console.log(`Attaching to ${target.label} (app id ${target.appId}) ...`);
-    await kintone.setCustomize(target.appId, {
-      desktop: {
-        js: [{ type: 'FILE', file: { fileKey: desktopJsKey } }],
-        css: [{ type: 'FILE', file: { fileKey: desktopCssKey } }],
-      },
-      mobile: {
-        js: [{ type: 'FILE', file: { fileKey: mobileJsKey } }],
-        css: [{ type: 'FILE', file: { fileKey: mobileCssKey } }],
-      },
-      scope: 'ALL',
+      console.log(`Attaching to ${target.label} (app id ${target.appId}) ...`);
+      await kintone.setCustomize(target.appId, {
+        desktop: {
+          js: [{ type: 'FILE', file: { fileKey: desktopJsKey } }],
+          css: [{ type: 'FILE', file: { fileKey: desktopCssKey } }],
+        },
+        mobile: {
+          js: [{ type: 'FILE', file: { fileKey: mobileJsKey } }],
+          css: [{ type: 'FILE', file: { fileKey: mobileCssKey } }],
+        },
+        scope: 'ALL',
+      });
+
+      // updateAppCustomize only updates the pre-live settings, like addFormFields/deployApp for
+      // fields — it must be deployed to actually reach end users.
+      console.log(`Deploying customize settings for ${target.label} ...`);
+      await kintone.deployApp(target.appId);
+      await kintone.waitForDeploy(target.appId);
     });
-
-    // updateAppCustomize only updates the pre-live settings, like addFormFields/deployApp for
-    // fields — it must be deployed to actually reach end users.
-    console.log(`Deploying customize settings for ${target.label} ...`);
-    await kintone.deployApp(target.appId);
-    await kintone.waitForDeploy(target.appId);
   }
 
   for (const target of cssOnlyTargets) {
-    console.log(`Uploading kintone-theme.css for ${target.label} ...`);
-    const desktopCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
-    const mobileCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
+    await withRetry(`deploy to ${target.label}`, async () => {
+      console.log(`Uploading kintone-theme.css for ${target.label} ...`);
+      const desktopCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
+      const mobileCssKey = await kintone.uploadFile('kintone-theme.css', themeCss);
 
-    console.log(`Attaching to ${target.label} (app id ${target.appId}) ...`);
-    await kintone.setCustomize(target.appId, {
-      desktop: { js: [], css: [{ type: 'FILE', file: { fileKey: desktopCssKey } }] },
-      mobile: { js: [], css: [{ type: 'FILE', file: { fileKey: mobileCssKey } }] },
-      scope: 'ALL',
+      console.log(`Attaching to ${target.label} (app id ${target.appId}) ...`);
+      await kintone.setCustomize(target.appId, {
+        desktop: { js: [], css: [{ type: 'FILE', file: { fileKey: desktopCssKey } }] },
+        mobile: { js: [], css: [{ type: 'FILE', file: { fileKey: mobileCssKey } }] },
+        scope: 'ALL',
+      });
+
+      console.log(`Deploying customize settings for ${target.label} ...`);
+      await kintone.deployApp(target.appId);
+      await kintone.waitForDeploy(target.appId);
     });
-
-    console.log(`Deploying customize settings for ${target.label} ...`);
-    await kintone.deployApp(target.appId);
-    await kintone.waitForDeploy(target.appId);
   }
 
   console.log('Done. chat.js + kintone-theme.css attached to 取引先/案件/リード/担当者.');

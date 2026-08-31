@@ -7,6 +7,7 @@ import {
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
 import { aggregateEmbeddable } from '../semantic/aggregate';
+import { cardsEmbeddable } from '../semantic/cards';
 import { fiscalEmbeddable } from '../semantic/fiscal';
 
 export const AGENT_WORKFLOW_NAME = '[kintone] 秘書AIエージェント';
@@ -200,13 +201,16 @@ lead_source/lead_status を使う場合、metric は count のみ選べます(�
 
 テンプレート(template)は次のいずれかを選んでください:
 - "T1": 単一の数値のみを聞いている(例:「今期の受注額は?」「今月の成約件数は?」)。dimension不要。
-- "T2": 1つの次元でカテゴリ別に集計したい(例:「担当者別の受注額」「流入経路別のリード数」)。
-  dimensionが必須です。
+- "T2": 1つの次元でカテゴリ別に集計したい(例:「担当者別の受注額」「流入経路別のリード数」
+  「業種別の受注率」)。dimensionが必須です。metricは count/amount_sum に限らず win_rate 等
+  どの指標でも構いません——「業種別の受注率」のように"○○別のX"という言い方でも、次元が
+  1つしか無ければT2です(T5と混同しないこと)。
 - "T4": パイプライン/フェーズ推移を見たい(例:「パイプラインの状況」「フェーズごとの件数」)。
   常にフェーズ別の指標を返すため、metric以外(dimension等)は不要です。
-- "T5": 2つの次元を掛け合わせたクロス集計をしたい(例:「失注理由を業種別に」)。dimensionと
-  dimensionBの両方が必須です。同じ対象(案件どうし、またはリードどうし)の次元のみ組み合わせ
-  可能です。
+- "T5": **2つの次元が明示されている**クロス集計をしたい場合のみ(例:「失注理由を業種別に」
+  =失注理由×業種の2軸、「担当者ごとのフェーズ別件数」=担当者×フェーズの2軸)。次元が1つしか
+  無い質問(「業種別の受注率」等)をT5にしないこと。dimensionとdimensionBの両方が必須です。
+  同じ対象(案件どうし、またはリードどうし)の次元のみ組み合わせ可能です。
 - "T8": 条件に合う案件の一覧が欲しい(例:「今月クロージング予定の案件一覧」)。metric・
   dimensionは不要です。
 
@@ -227,8 +231,37 @@ needClarify でその期間が未対応である旨を伝えてください。
 無効など)は、template を null にし、needClarify に日本語の聞き返し文を入れてください。
 分析質問でない場合(対象外の例に該当する場合)は needClarify も null にしてください。
 
+【現在のカード(直前に表示中のグラフ)について、op(意図)の判定】
+ユーザーメッセージのJSONには currentCard(直前にチャットへ表示したグラフの template/params。
+無ければ null)が含まれます。あなたはまず次の4つの意図(op)のどれかを判定してください:
+
+- "query": 新しい集計を1から行いたい場合。currentCardが無い場合は必ずqueryです。currentCard
+  があっても、テンプレそのものが変わるような全く別の質問(例:表示中が「担当者別の受注額」
+  なのに「今月の成約件数は?」)もqueryとして扱ってください。
+- "refine": currentCardがあり、「今表示されているグラフの一部だけを変えたい」という意図の場合
+  (例:「業種で見せて」「先月で」「上位5件だけ」「金額じゃなくて件数で」)。templateは
+  currentCardと同じものとして扱われるため出力不要です。metric/dimension/dimensionB/filters/
+  period/topN/sortのうち、変更したいものだけに値を入れ、変更しないものは必ず null にして
+  ください(currentCardの値がそのまま維持されます)。
+- "narrate": currentCardがあり、ユーザーが今表示されているグラフの内容について尋ねている場合
+  (例:「このグラフについて何が言える?」「なぜこうなってるの?」「特徴を教えて」)。新しい
+  集計は不要なので、op以外のフィールドはすべて null で構いません。
+- "clarify": ユーザーの発言が分析(BI)の質問であることは明らかだが、テンプレート/指標/次元を
+  1つに決めるための情報が足りない場合のみ(例:「分析して」「グラフで見せて」のように、
+  何を集計したいか特定できない)。needClarifyに聞き返し文を入れてください。
+
+★重要: 「対象外(分析質問ではない)の例」に該当する発言(特定の会社名・案件名・人物についての
+質問、雑談、新規登録・編集・削除の依頼、天気などの無関係な質問等)は、情報が足りないわけでは
+なく単に分析質問ではないので、clarifyを選ばないでください。この場合は op を "query" のまま
+にして template を null、needClarify も null にしてください(一般チャットへそのまま委ねます)。
+"clarify"は「分析質問ではあるが曖昧」なケース専用です——分析質問かどうか自体が怪しい場合は
+"clarify"ではなく template:null の"query"を選んでください。
+
+currentCardが無い状態(null)では、refine・narrateを選ばないでください(その場合は必ず
+query または clarify になります)。
+
 必ず次のJSON形式のみで回答してください(説明文は不要):
-{"template": "T1"|"T2"|"T4"|"T5"|"T8"|null, "metric": "<指標コード>"|null, "dimension": "<次元コード>"|null, "dimensionB": "<次元コード>"|null, "period": "current_fiscal_year"|"current_month"|"last_month"|"all"|null, "filters": [...], "needClarify": "<日本語の聞き返し文>"|null}`;
+{"op": "query"|"refine"|"narrate"|"clarify", "template": "T1"|"T2"|"T4"|"T5"|"T8"|null, "metric": "<指標コード>"|null, "dimension": "<次元コード>"|null, "dimensionB": "<次元コード>"|null, "period": "current_fiscal_year"|"current_month"|"last_month"|"all"|null, "topN": <数値>|null, "sort": "value_desc"|"value_asc"|"label"|null, "filters": [...], "needClarify": "<日本語の聞き返し文>"|null}`;
 
 /**
  * RELVA BI (要件定義書 §1 絶対原則) — factSheet に既にある数値・表記のみを引用してよく、
@@ -421,7 +454,7 @@ return [{ json: { ...$input.item.json, valid: provided === expected } }];
         headerParameters: { parameters: openaiHeaders() },
         sendBody: true,
         specifyBody: 'json',
-        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(BI_ROUTER_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ message: $json.body.message, history: ($json.body.history || []).slice(-6) }) } ] }) }}`,
+        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(BI_ROUTER_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ message: $json.body.message, history: ($json.body.history || []).slice(-6), currentCard: $json.body.currentCard || null }) } ] }) }}`,
         options: {},
       },
     },
@@ -433,7 +466,11 @@ return [{ json: { ...$input.item.json, valid: provided === expected } }];
       position: nextBiPos(),
       parameters: {
         jsCode: `
+${cardsEmbeddable()}
+
 const original = $node["Verify Secret"].json.body || {};
+const currentCard = original.currentCard || null;
+
 const METRIC_CODES = ["count", "amount_sum", "amount_avg", "won_amount", "won_count", "lost_count", "win_rate"];
 const DIMENSION_FIELD_MAP = {
   owner: { field: "owner", targetApp: "opportunity" },
@@ -458,50 +495,114 @@ try {
 // 妥当性をここでコード側に確認させる(LLMのプロンプト遵守だけに頼らない——このファイルの
 // 既存の Format Response が同じ理由で採用している方針を踏襲)。
 function needClarify(message) {
-  return { isBiQuestion: true, template: null, needClarify: message };
+  return { isBiQuestion: true, op: "clarify", template: null, needClarify: message };
 }
 
-let plan;
-if (raw && raw.template && TEMPLATE_IDS.indexOf(raw.template) !== -1) {
-  const dim = raw.dimension ? DIMENSION_FIELD_MAP[raw.dimension] : undefined;
-  const dimB = raw.dimensionB ? DIMENSION_FIELD_MAP[raw.dimensionB] : undefined;
+// query/refine共通: テンプレ・指標・次元の組み合わせが妥当かを検証する。
+// 妥当なら null、妥当でなければ聞き返し文言を返す。
+function validateShape(template, metric, dimension, dimensionB) {
+  const dim = dimension ? DIMENSION_FIELD_MAP[dimension] : undefined;
+  const dimB = dimensionB ? DIMENSION_FIELD_MAP[dimensionB] : undefined;
   // T8(条件抽出リスト)は runAggregate 側で metric を一切参照しない(固定カラムの一覧を返す
   // だけ)ため、ここでも metric を必須にしない——実際にライブでT8質問が「指標を教えて」と
   // 聞き返されてしまう回帰を起こしたため明示的に除外している。
-  const metricOk = raw.template === "T8" || (raw.metric && METRIC_CODES.indexOf(raw.metric) !== -1);
+  const metricOk = template === "T8" || (metric && METRIC_CODES.indexOf(metric) !== -1);
 
-  if (!metricOk) {
-    plan = needClarify("どの指標について知りたいか教えていただけますか?(例: 件数、金額合計、受注率など)");
-  } else if (raw.dimension && !dim) {
-    plan = needClarify("すみません、その切り口には対応していません。担当者別・フェーズ別・業種別・失注理由別・流入経路別などでお試しください。");
-  } else if (raw.dimensionB && !dimB) {
-    plan = needClarify("すみません、その切り口には対応していません。");
-  } else if (dim && dim.targetApp === "lead" && raw.template !== "T8" && raw.metric !== "count") {
-    plan = needClarify("リードの分析では件数のみ集計できます。");
-  } else if (raw.template === "T2" && !dim) {
-    plan = needClarify("何を軸にカテゴリ別に見たいか教えていただけますか?(例: 担当者別、フェーズ別など)");
-  } else if (raw.template === "T5" && (!dim || !dimB)) {
-    plan = needClarify("クロス集計には2つの軸が必要です。例えば「失注理由を業種別に」のように教えてください。");
-  } else if (raw.template === "T5" && dim && dimB && dim.targetApp !== dimB.targetApp) {
-    plan = needClarify("クロス集計は案件どうし、またはリードどうしの軸のみ組み合わせられます。");
+  if (!metricOk) return "どの指標について知りたいか教えていただけますか?(例: 件数、金額合計、受注率など)";
+  if (dimension && !dim) return "すみません、その切り口には対応していません。担当者別・フェーズ別・業種別・失注理由別・流入経路別などでお試しください。";
+  if (dimensionB && !dimB) return "すみません、その切り口には対応していません。";
+  if (dim && dim.targetApp === "lead" && template !== "T8" && metric !== "count") return "リードの分析では件数のみ集計できます。";
+  if (template === "T2" && !dim) return "何を軸にカテゴリ別に見たいか教えていただけますか?(例: 担当者別、フェーズ別など)";
+  if (template === "T5" && (!dim || !dimB)) return "クロス集計には2つの軸が必要です。例えば「失注理由を業種別に」のように教えてください。";
+  if (template === "T5" && dim && dimB && dim.targetApp !== dimB.targetApp) return "クロス集計は案件どうし、またはリードどうしの軸のみ組み合わせられます。";
+  return null;
+}
+
+function sanitizeFilters(filters) {
+  return Array.isArray(filters) ? filters.filter((f) => f && typeof f.field === "string" && typeof f.op === "string") : [];
+}
+
+const VALID_OPS = ["query", "refine", "narrate", "clarify"];
+const op = raw && VALID_OPS.indexOf(raw.op) !== -1 ? raw.op : "query";
+
+let plan;
+if (op === "clarify") {
+  plan = needClarify(raw && raw.needClarify ? String(raw.needClarify) : "もう少し詳しく教えていただけますか?");
+} else if (op === "narrate") {
+  // RELVA BI 追加要件定義書 §4: narrateは新しい集計を一切行わない——直前のカードの
+  // 確定済みデータ(currentCard)だけを根拠にコメントさせる。currentCardが無ければ聞き返す。
+  if (!currentCard || !currentCard.template) {
+    plan = needClarify("直前に表示されているグラフが無いため、まず何を見たいか教えてください。");
+  } else {
+    // metric/dimension/dimensionB/period/filtersをcurrentCard.paramsからそのまま引き継ぐ
+    // (何も変更しないため refine() は使わない)。Build Narrate Input / Format BI Response が
+    // cardSpec を一律に組み立てられるよう、query/refineと同じ形のbiPlanにしておく。
+    const p = currentCard.params || {};
+    plan = {
+      isBiQuestion: true,
+      op: "narrate",
+      template: currentCard.template,
+      metric: p.metric,
+      dimension: p.dimension || undefined,
+      dimensionB: p.dimensionB || undefined,
+      period: p.period && p.period.preset ? p.period.preset : "current_fiscal_year",
+      filters: p.filters || [],
+      needClarify: null,
+    };
+  }
+} else if (op === "refine") {
+  if (!currentCard || !currentCard.template) {
+    plan = needClarify("直前に表示されているグラフが無いため、まず何を見たいか教えてください。");
+  } else {
+    // ワンクリックのチップ操作も自然言語リファインも同じ refine() を通す(cards.ts §3)。
+    const patch = {};
+    if (raw.metric && METRIC_CODES.indexOf(raw.metric) !== -1) patch.metric = raw.metric;
+    if (raw.dimension) patch.dimension = raw.dimension;
+    if (raw.dimensionB) patch.dimensionB = raw.dimensionB;
+    if (Array.isArray(raw.filters) && raw.filters.length > 0) patch.filters = sanitizeFilters(raw.filters);
+    if (raw.period && PERIODS.indexOf(raw.period) !== -1) patch.period = { preset: raw.period };
+    if (typeof raw.topN === "number") patch.topN = raw.topN;
+    if (raw.sort) patch.sort = raw.sort;
+
+    const merged = refine(currentCard.template, currentCard.params || {}, patch);
+    const invalidMsg = validateShape(currentCard.template, merged.metric, merged.dimension, merged.dimensionB);
+    if (invalidMsg) {
+      plan = needClarify(invalidMsg);
+    } else {
+      plan = {
+        isBiQuestion: true,
+        op: "refine",
+        template: currentCard.template,
+        metric: merged.metric,
+        dimension: merged.dimension || undefined,
+        dimensionB: merged.dimensionB || undefined,
+        period: merged.period && merged.period.preset ? merged.period.preset : "current_fiscal_year",
+        filters: merged.filters || [],
+        needClarify: null,
+      };
+    }
+  }
+} else if (!raw || !raw.template || TEMPLATE_IDS.indexOf(raw.template) === -1) {
+  // op === "query" だが template が無い/未知 = 分析質問ではない(一般チャットへフォールスルー)。
+  // ただしT5/次元不足等で needClarify だけ来る場合は、分析質問"だが曖昧"のケースとして扱う。
+  plan = raw && raw.needClarify ? needClarify(String(raw.needClarify)) : { isBiQuestion: false };
+} else {
+  const invalidMsg = validateShape(raw.template, raw.metric, raw.dimension, raw.dimensionB);
+  if (invalidMsg) {
+    plan = needClarify(invalidMsg);
   } else {
     plan = {
       isBiQuestion: true,
+      op: "query",
       template: raw.template,
       metric: raw.metric,
       dimension: raw.dimension || undefined,
       dimensionB: raw.dimensionB || undefined,
       period: PERIODS.indexOf(raw.period) !== -1 ? raw.period : "current_fiscal_year",
-      filters: Array.isArray(raw.filters)
-        ? raw.filters.filter((f) => f && typeof f.field === "string" && typeof f.op === "string")
-        : [],
+      filters: sanitizeFilters(raw.filters),
       needClarify: null,
     };
   }
-} else if (raw && raw.needClarify) {
-  plan = needClarify(String(raw.needClarify));
-} else {
-  plan = { isBiQuestion: false };
 }
 
 return [{ json: { ...original, biPlan: plan } }];
@@ -553,6 +654,59 @@ return [{ json: {
   userName: original.userName || "",
   message: original.message || "",
 } }];
+`.trim(),
+      },
+    },
+    {
+      id: 'is_narrate_if',
+      name: 'Is Narrate?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextBiPos(),
+      parameters: {
+        // narrate(直前のカードについて話す)は新しい集計を一切行わない——Fetch BI
+        // Opportunities/Leads・Aggregate BI を丸ごとバイパスし、currentCardの確定済み
+        // データだけを引き継ぐ(RELVA BI 追加要件定義書 §4)。
+        conditions: {
+          boolean: [{ value1: '={{ $json.biPlan.op === "narrate" }}', value2: true }],
+        },
+      },
+    },
+    {
+      id: 'build_narrate_input',
+      name: 'Build Narrate Input',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+${aggregateEmbeddable()}
+
+const original = $node["Parse BI Plan"].json;
+const plan = original.biPlan;
+const currentCard = original.currentCard || null;
+
+// Parse BI PlanでcurrentCard.templateの有無は既に確認済みだが、dataが欠けているケース
+// (フロントエンドの状態が壊れている等)は防御的にここでもう一度弾く。
+if (!currentCard || !currentCard.data) {
+  return [{ json: { ...original, biAggregateError: "直前のグラフのデータが見つかりませんでした。もう一度質問し直してください。" } }];
+}
+
+// 新しい集計は一切行わない —— currentCardが既に持っている確定済みの表示結果をそのまま使う。
+const biResult = {
+  template: currentCard.template,
+  title: currentCard.title || "",
+  interpretation: currentCard.interpretation || "",
+  filtersApplied: currentCard.filtersApplied || [],
+  data: currentCard.data,
+  narrative: "",
+};
+
+// factSheetの整形はAggregate BIと全く同じ関数を使う(表示の一貫性・"LLMに計算させない"
+// 原則を経路によらず保つため——aggregateEmbeddable()経由でbuildFactSheetは既に埋め込み済み)。
+const factSheet = buildFactSheet(currentCard.template, plan.metric, biResult.title, currentCard.data);
+
+return [{ json: { ...original, biResult, factSheet } }];
 `.trim(),
       },
     },
@@ -617,10 +771,8 @@ const plan = original.biPlan;
 const opportunityRecords = $node["Fetch BI Opportunities"].json.records || [];
 const leadRecords = $node["Fetch BI Leads"].json.records || [];
 
-// DIMENSION_LABELS/METRIC_LABELS は aggregateEmbeddable() が既に宣言済み(上に埋め込み済み)
-// なので、ここでは再宣言しない(再宣言すると SyntaxError になる)。単位はaggregate.ts側に
-// 無いのでここでだけ持つ。
-const METRIC_UNITS = { count: "件", amount_sum: "円", amount_avg: "円", won_amount: "円", won_count: "件", lost_count: "件", win_rate: "%" };
+// DIMENSION_LABELS/METRIC_LABELS/METRIC_UNITS/buildFactSheet は aggregateEmbeddable() が
+// 既に宣言済み(上に埋め込み済み)なので、ここでは再宣言しない(再宣言すると SyntaxError になる)。
 const PERIOD_LABELS = { current_fiscal_year: "今期", current_month: "今月", last_month: "先月", all: "全期間" };
 
 // period(相対的な期間表現)を実行時の「今日」で絶対的な close_date 範囲へ解決する。
@@ -715,30 +867,10 @@ if (plan.template === "T1") {
 
 // ナレーションLLMには生のbiResult(円単位の生数値など)をそのまま渡さない——万円換算や
 // パーセント表記をLLM自身に計算させると誤変換する(実際に「815万円」を「8,150万円」と
-// 一桁多く言う事故が本番で発生した)。ここで日本語の表示用文字列に決定的に整形してから
-// 渡し、LLMには「この表記をそのまま引用するだけ」の役目にする。
-function formatMetricValue(metric, value) {
-  const unit = METRIC_UNITS[metric] || "";
-  if (unit === "円") return "約" + Math.round(value / 10000).toLocaleString("ja-JP") + "万円";
-  if (unit === "%") return value.toFixed(1) + "%";
-  return value.toLocaleString("ja-JP") + unit;
-}
-
-let factSheet = "";
-if (plan.template === "T1") {
-  factSheet = title + ": " + formatMetricValue(plan.metric, data.value);
-} else if (plan.template === "T2") {
-  factSheet = data.series.map((s) => s.key + ": " + formatMetricValue(plan.metric, s.value)).join("、");
-} else if (plan.template === "T4") {
-  factSheet = data.steps.map((s) => s.stage + ": " + formatMetricValue(plan.metric, s.value)).join("、");
-} else if (plan.template === "T5") {
-  factSheet = data.matrix
-    .filter((m) => m.value > 0)
-    .map((m) => m.row + "×" + m.col + ": " + formatMetricValue(plan.metric, m.value))
-    .join("、");
-} else if (plan.template === "T8") {
-  factSheet = data.records.length + "件: " + data.records.map((r) => r.deal_name).join("、");
-}
+// 一桁多く言う事故が本番で発生した)。buildFactSheet()(aggregateEmbeddable経由で埋め込み
+// 済み)が日本語の表示用文字列を決定的に整形し、LLMには「引用するだけ」の役目にする。
+// narrate(既存カードに話しかける)経路(Build Narrate Input ノード)も同じ関数を使う。
+const factSheet = buildFactSheet(plan.template, plan.metric, title, data);
 
 const biResult = {
   template: plan.template,
@@ -751,6 +883,20 @@ const biResult = {
 
 return [{ json: { ...original, biResult, factSheet } }];
 `.trim(),
+      },
+    },
+    {
+      id: 'prepare_bi_narrative_input',
+      name: 'Prepare BI Narrative Input',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        // Aggregate BI(query/refine)とBuild Narrate Input(narrate)という2つの異なる
+        // ノードの出力を、後続(BI Narrative/Format BI Response)が1つの安定した名前で
+        // 参照できるように集約する恒等ノード。Prepare Final Response と全く同じパターン
+        // (実行されなかった方のノード名を直接参照するとエラーになるため)。
+        jsCode: 'return [{ json: $json }];',
       },
     },
     {
@@ -803,8 +949,10 @@ return [{ json: {
         sendBody: true,
         specifyBody: 'json',
         // biResult をそのまま渡さない(円の生数値を渡すとLLMが自分で万円換算して桁を間違える
-        // ——実際に本番で発生した)。Aggregate BI が組み立てた表示確定済みの factSheet だけを渡す。
-        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(BI_NARRATIVE_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ title: $node["Aggregate BI"].json.biResult.title, interpretation: $node["Aggregate BI"].json.biResult.interpretation, factSheet: $node["Aggregate BI"].json.factSheet }) } ] }) }}`,
+        // ——実際に本番で発生した)。Aggregate BI/Build Narrate Input が組み立てた表示確定済みの
+        // factSheet だけを渡す。query/refine/narrateのどれが実行されたかに関わらず、必ず
+        // Prepare BI Narrative Input(集約ノード)を経由した名前で参照する。
+        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(BI_NARRATIVE_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ title: $node["Prepare BI Narrative Input"].json.biResult.title, interpretation: $node["Prepare BI Narrative Input"].json.biResult.interpretation, factSheet: $node["Prepare BI Narrative Input"].json.factSheet }) } ] }) }}`,
         options: {},
       },
     },
@@ -816,7 +964,10 @@ return [{ json: {
       position: nextBiPos(),
       parameters: {
         jsCode: `
-const original = $node["Aggregate BI"].json;
+// query/refine/narrateのどれが実行されたかに関わらず、Prepare BI Narrative Input(集約
+// ノード)経由で参照する——実行されなかった方の枝のノード名(Aggregate BI等)を直接
+// 参照するとエラーになるため。
+const original = $node["Prepare BI Narrative Input"].json;
 let narrative = "";
 try {
   const parsed = JSON.parse($json.choices[0].message.content);
@@ -825,10 +976,29 @@ try {
   narrative = "";
 }
 const biResult = { ...original.biResult, narrative: narrative || original.biResult.interpretation };
+const plan = original.biPlan || {};
+// カード=テンプレインスタンス統一モデル(RELVA BI 追加要件定義書 §3): このカードが
+// どのtemplate/paramsから作られたかをcardSpecとしてフロントエンドへ返す。フロント
+// エンドはこれをcurrentCardとして保持し、次のrefine/narrateリクエストに載せて送り返す。
+const cardSpec = {
+  template: biResult.template,
+  params: {
+    metric: plan.metric,
+    dimension: plan.dimension,
+    dimensionB: plan.dimensionB,
+    filters: plan.filters || [],
+    period: plan.period ? { preset: plan.period } : undefined,
+  },
+  title: biResult.title,
+  interpretation: biResult.interpretation,
+  filtersApplied: biResult.filtersApplied,
+  data: biResult.data,
+};
 return [{ json: {
   response: {
     answer: biResult.interpretation + (narrative ? " " + narrative : ""),
     biResult,
+    cardSpec,
     referencedRecords: [],
     action: null,
     prefill: {},
@@ -1399,13 +1569,23 @@ return [{ json: {
     'Needs BI Clarify?': {
       main: [
         [{ node: 'Format BI Clarify', type: 'main', index: 0 }],
-        [{ node: 'Fetch BI Opportunities', type: 'main', index: 0 }],
+        [{ node: 'Is Narrate?', type: 'main', index: 0 }],
       ],
     },
     'Format BI Clarify': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
+    // narrate(直前のカードについて話す)は集計を一切バイパスする。query/refineは
+    // これまで通りFetch BI Opportunities/Leads→Aggregate BIへ進む。
+    'Is Narrate?': {
+      main: [
+        [{ node: 'Build Narrate Input', type: 'main', index: 0 }],
+        [{ node: 'Fetch BI Opportunities', type: 'main', index: 0 }],
+      ],
+    },
+    'Build Narrate Input': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
     'Fetch BI Opportunities': { main: [[{ node: 'Fetch BI Leads', type: 'main', index: 0 }]] },
     'Fetch BI Leads': { main: [[{ node: 'Aggregate BI', type: 'main', index: 0 }]] },
-    'Aggregate BI': { main: [[{ node: 'BI Aggregate OK?', type: 'main', index: 0 }]] },
+    'Aggregate BI': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
+    'Prepare BI Narrative Input': { main: [[{ node: 'BI Aggregate OK?', type: 'main', index: 0 }]] },
     'BI Aggregate OK?': {
       main: [
         [{ node: 'BI Narrative', type: 'main', index: 0 }],

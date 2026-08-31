@@ -27,6 +27,11 @@ const COLUMN_LABELS: Record<string, string> = {
   stage: 'フェーズ',
   owner: '担当者',
   close_date: 'クロージング予定日',
+  // entity: 'lead' の T8(例: 対応待ちリード一覧)向け。
+  lead_name: '氏名',
+  company_name: '会社名',
+  source: '流入経路',
+  status: 'ステータス',
 };
 
 export function renderRecordList(container: HTMLElement, payload: PayloadFor<'T8'>, recordUrlBase?: string): void {

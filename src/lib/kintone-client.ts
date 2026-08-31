@@ -151,6 +151,23 @@ export class KintoneAdminClient {
     await this.client.record.updateAllRecords({ app: appId, records });
   }
 
+  async addRecords(appId: number, records: Array<Record<string, { value: unknown }>>): Promise<string[]> {
+    const result = await this.client.record.addRecords({ app: appId, records });
+    return result.ids as string[];
+  }
+
+  /** Deletes every record in the app (chunked to kintone's 100-ids-per-call cap). Used only by
+   * seed-demo-data.ts's `--clear` — destructive, callers must confirm with a human first. */
+  async deleteAllRecords(appId: number): Promise<number> {
+    const records = await this.getAllRecords<{ $id: { value: string } }>(appId);
+    const ids = records.map((r) => r.$id.value);
+    const CHUNK = 100;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      await this.client.record.deleteRecords({ app: appId, ids: ids.slice(i, i + CHUNK) });
+    }
+    return ids.length;
+  }
+
   /** Unused in phase 1; built now for phase 3 (business-card upload) reuse. */
   async uploadFile(fileName: string, data: Buffer | string): Promise<string> {
     const result = await this.client.file.uploadFile({ file: { name: fileName, data } });

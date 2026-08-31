@@ -1,4 +1,5 @@
 import type { PayloadFor } from '../../semantic/templates';
+import { formatMetricNumber } from '../format-utils';
 import { CHART_COLORS, renderChart } from './echarts-base';
 
 export interface RenderBarHOptions {
@@ -16,20 +17,31 @@ export function renderBarH(container: HTMLElement, payload: PayloadFor<'T2'>, op
   const categories = payload.series.map((s) => s.key);
   const values = payload.series.map((s) => s.value);
 
+  // 生の円数値("10,830,000")をそのまま棒の右側ラベルに出すと、幅の狭いカードやチャット
+  // 吹き出しの右端で見切れる(実際に発生した表示崩れ)。万円表記(既存ダッシュボードの
+  // formatYen()と同じ規約)に丸めることで桁数を抑え、右マージンも少し広めに取る。
   return renderChart(container, {
-    grid: { left: 90, right: 24, top: 12, bottom: 12, containLabel: true },
+    grid: { left: 90, right: 48, top: 12, bottom: 12, containLabel: true },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
       formatter: (params: unknown) => {
         const items = Array.isArray(params) ? params : [params];
         const first = items[0] as { name: string; value: number; marker: string };
-        const mainLine = `${first.marker}${first.name}: ${Number(first.value).toLocaleString('ja-JP')}${payload.metric.unit}`;
+        const mainLine = `${first.marker}${first.name}: ${formatMetricNumber(Number(first.value), payload.metric.unit)}`;
         const extra = opts.tooltipExtra?.(first.name);
         return extra ? `${mainLine}<br/>${extra}` : mainLine;
       },
     },
-    xAxis: { type: 'value', axisLabel: { color: CHART_COLORS.label, fontSize: 11 }, splitLine: { lineStyle: { color: CHART_COLORS.grid } } },
+    xAxis: {
+      type: 'value',
+      axisLabel: {
+        color: CHART_COLORS.label,
+        fontSize: 11,
+        formatter: (v: number) => formatMetricNumber(v, payload.metric.unit),
+      },
+      splitLine: { lineStyle: { color: CHART_COLORS.grid } },
+    },
     yAxis: {
       type: 'category',
       data: categories,
@@ -49,7 +61,7 @@ export function renderBarH(container: HTMLElement, payload: PayloadFor<'T2'>, op
           color: CHART_COLORS.label,
           fontSize: 11,
           fontWeight: 700,
-          formatter: (p) => Number(p.value).toLocaleString('ja-JP'),
+          formatter: (p) => formatMetricNumber(Number(p.value), payload.metric.unit),
         },
       },
     ],

@@ -24,6 +24,7 @@
     "setup:proposal": "tsx src/scripts/deploy-proposal-workflow.ts",
     "backfill:industry": "tsx src/scripts/backfill-industry.ts",
     "eval:router": "tsx src/scripts/eval-router.ts",
+    "seed:demo": "tsx src/scripts/seed-demo-data.ts",
     "sync:bulk": "tsx src/scripts/bulk-sync-pinecone.ts",
     "sync:manuals": "tsx src/scripts/sync-manuals-pinecone.ts",
     "dev": "vite",
