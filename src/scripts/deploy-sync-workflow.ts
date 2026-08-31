@@ -20,6 +20,8 @@ async function main() {
     accountAppId: requireAppId(env, 'kintoneAppIdAccount'),
     opportunityAppId: requireAppId(env, 'kintoneAppIdOpportunity'),
     leadAppId: requireAppId(env, 'kintoneAppIdLead'),
+    supabaseUrl: requireEnvValue('SUPABASE_URL', env.supabaseUrl),
+    supabaseServiceRoleKey: requireEnvValue('SUPABASE_SERVICE_ROLE_KEY', env.supabaseServiceRoleKey),
   });
 
   const n8n = new N8nClient({ instanceUrl: env.n8nInstanceUrl, apiKey: env.n8nApiKey });

@@ -11,6 +11,8 @@ export interface SyncWorkflowConfig {
   accountAppId: number;
   opportunityAppId: number;
   leadAppId: number;
+  supabaseUrl: string;
+  supabaseServiceRoleKey: string;
 }
 
 function offsetPositions(startX: number, y: number, count: number, gap = 220): [number, number][] {
@@ -18,7 +20,7 @@ function offsetPositions(startX: number, y: number, count: number, gap = 220): [
 }
 
 export function buildSyncWorkflow(config: SyncWorkflowConfig) {
-  const positions = offsetPositions(0, 300, 5);
+  const positions = offsetPositions(0, 300, 6);
   let p = 0;
   const nextPos = () => positions[p++];
 
@@ -29,6 +31,11 @@ export function buildSyncWorkflow(config: SyncWorkflowConfig) {
   };
 
   const pineconeHeader = () => [{ name: 'Api-Key', value: config.pineconeApiKey }];
+  const supabaseHeaders = () => [
+    { name: 'apikey', value: config.supabaseServiceRoleKey },
+    { name: 'Authorization', value: `Bearer ${config.supabaseServiceRoleKey}` },
+    { name: 'Content-Type', value: 'application/json' },
+  ];
 
   const nodes = [
     {
@@ -118,6 +125,35 @@ return [{ json: { action: 'upsert', vectorId, text, metadata } }];
       },
     },
     {
+      id: 'invalidate_dataset_cache',
+      name: 'Invalidate Dataset Cache',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextPos(),
+      onError: 'continueRegularOutput',
+      alwaysOutputData: true,
+      parameters: {
+        // RELVA BI 追加要件定義書 §7 — 取引先/案件/リードのいずれかが追加・編集・削除される
+        // たびに、query/refine用のデータセットキャッシュ(agent-workflow.tsのdataset_cache)を
+        // 即時に空にする。無効化範囲を「どのレコードがどのキャッシュ行に影響するか」で厳密に
+        // 絞り込むより、変更があったら常に両方まとめて消すほうが単純で取りこぼしが無い
+        // (このWebhook自体がkintone管理画面での手動登録が前提——README/setup:webhooks参照。
+        // 登録されていない間はこのノードは単に呼ばれないだけで、Aggregate BI側のTTL(5分)が
+        // 保険として効く)。Record to Text と並行して実行する(お互いに依存しない)。
+        method: 'DELETE',
+        url: `${config.supabaseUrl}/rest/v1/dataset_cache`,
+        sendHeaders: true,
+        headerParameters: {
+          parameters: [...supabaseHeaders(), { name: 'Prefer', value: 'return=minimal' }],
+        },
+        sendQuery: true,
+        queryParameters: {
+          parameters: [{ name: 'cache_key', value: 'in.(opportunity_records,lead_records)' }],
+        },
+        options: {},
+      },
+    },
+    {
       id: 'pinecone_delete',
       name: 'Pinecone Delete',
       type: 'n8n-nodes-base.httpRequest',
@@ -177,7 +213,11 @@ return [{ json: { action: 'upsert', vectorId, text, metadata } }];
 
   const connections = {
     Webhook: { main: [[{ node: 'Parse Webhook Payload', type: 'main', index: 0 }]] },
-    'Parse Webhook Payload': { main: [[{ node: 'Record to Text', type: 'main', index: 0 }]] },
+    // Record to Text(Pineconeシンク)とInvalidate Dataset Cache(§7)は互いに独立——
+    // 同じ1件のwebhook入力から並行して実行する(片方が失敗してももう片方は影響しない)。
+    'Parse Webhook Payload': {
+      main: [[{ node: 'Record to Text', type: 'main', index: 0 }, { node: 'Invalidate Dataset Cache', type: 'main', index: 0 }]],
+    },
     'Record to Text': { main: [[{ node: 'Route by Action', type: 'main', index: 0 }]] },
     'Route by Action': {
       main: [

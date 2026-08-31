@@ -234,10 +234,12 @@ describe('Aggregate BI node', () => {
   const jsCode = jsCodeOf(wf.nodes, 'Aggregate BI');
 
   function run(biPlan: Record<string, unknown>, opportunityRecords: unknown[], leadRecords: unknown[] = []) {
+    // §7のデータセットキャッシュ導入後、Aggregate BIは Prepare BI Datasets(集約ノード)
+    // 経由でopportunityRecords/leadRecordsを読む(キャッシュヒット/ミスのどちらが実行された
+    // かに関わらず同じ名前で読めるようにする恒等ノード)。
     const $node = {
       'Parse BI Plan': { json: { biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' } },
-      'Fetch BI Opportunities': { json: { records: opportunityRecords } },
-      'Fetch BI Leads': { json: { records: leadRecords } },
+      'Prepare BI Datasets': { json: { opportunityRecords, leadRecords } },
     };
     return runNode<BiAggregateOutput>(jsCode, { $node }).json;
   }
@@ -331,6 +333,77 @@ describe('Aggregate BI node', () => {
     const out = run({ template: 'T2', metric: 'amount_sum', dimension: 'lead_source', period: 'all', filters: [] }, OPPS);
     expect(out.biResult).toBeUndefined();
     expect(out.biAggregateError).toMatch(/件数のみ/);
+  });
+});
+
+// RELVA BI 追加要件定義書 §7: query/refineのたびに毎回kintoneへ500件フェッチし直すのを避ける
+// ためのデータセットキャッシュ。キャッシュヒット/ミスのどちらでも、後続のAggregate BIが読む
+// Prepare BI Datasetsの形(opportunityRecords/leadRecords)へ正規化する2つのノードを検証する。
+// n8nのHTTP RequestノードはPostgRESTの配列レスポンスを1件ずつ別アイテムに分割するため
+// (Supabase Feedback Searchノードの既存コメントと同じ挙動)、これを1回で判定できる形に
+// 戻すノード。実際にこのバグで一度、キャッシュがヒットしているのに毎回ミス判定される
+// リグレッションが本番で発生した(このテストが無いと再発を検知できない)。
+describe('Collect Dataset Cache Rows node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Collect Dataset Cache Rows');
+
+  it('wraps all incoming items into a single { rows: [...] } item (json cannot be a bare array in n8n)', () => {
+    const $input = { all: () => [{ json: { cache_key: 'opportunity_records' } }, { json: { cache_key: 'lead_records' } }] };
+    const out = runNode<{ rows: unknown[] }>(jsCode, { $input }).json;
+    expect(out).toEqual({ rows: [{ cache_key: 'opportunity_records' }, { cache_key: 'lead_records' }] });
+  });
+
+  it('produces an empty rows array on a cold cache (0 incoming items)', () => {
+    const $input = { all: () => [] };
+    const out = runNode<{ rows: unknown[] }>(jsCode, { $input }).json;
+    expect(out).toEqual({ rows: [] });
+  });
+});
+
+describe('Use Cached Datasets node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Use Cached Datasets');
+
+  it('extracts opportunityRecords/leadRecords from the 2 cached rows, keyed by cache_key', () => {
+    const $node = { 'Parse BI Plan': { json: { biPlan: { template: 'T1' }, sessionId: 's' } } };
+    // Collect Dataset Cache Rows が {rows: [...]} の形に包んで渡す(n8nのCode nodeはjsonの
+    // 値が直接配列だと拒否するため)。
+    const $json = {
+      rows: [
+        { cache_key: 'opportunity_records', data: [{ deal_name: { value: 'A' } }] },
+        { cache_key: 'lead_records', data: [{ lead_name: { value: 'B' } }] },
+      ],
+    };
+    const out = runNode<{ opportunityRecords: unknown[]; leadRecords: unknown[]; sessionId: string }>(jsCode, {
+      $node,
+      $json,
+    }).json;
+    expect(out.opportunityRecords).toEqual([{ deal_name: { value: 'A' } }]);
+    expect(out.leadRecords).toEqual([{ lead_name: { value: 'B' } }]);
+    expect(out.sessionId).toBe('s'); // Parse BI Planの他フィールドも維持される
+  });
+
+  it('defaults to empty arrays if $json.rows is not the expected array shape (defensive)', () => {
+    const $node = { 'Parse BI Plan': { json: { biPlan: {} } } };
+    const out = runNode<{ opportunityRecords: unknown[]; leadRecords: unknown[] }>(jsCode, { $node, $json: {} }).json;
+    expect(out.opportunityRecords).toEqual([]);
+    expect(out.leadRecords).toEqual([]);
+  });
+});
+
+describe('Build Fetched Datasets node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Build Fetched Datasets');
+
+  it('extracts opportunityRecords/leadRecords from Fetch BI Opportunities/Leads by name', () => {
+    const $node = {
+      'Parse BI Plan': { json: { biPlan: { template: 'T1' }, sessionId: 's' } },
+      'Fetch BI Opportunities': { json: { records: [{ deal_name: { value: 'A' } }] } },
+      'Fetch BI Leads': { json: { records: [{ lead_name: { value: 'B' } }] } },
+    };
+    const out = runNode<{ opportunityRecords: unknown[]; leadRecords: unknown[] }>(jsCode, { $node }).json;
+    expect(out.opportunityRecords).toEqual([{ deal_name: { value: 'A' } }]);
+    expect(out.leadRecords).toEqual([{ lead_name: { value: 'B' } }]);
   });
 });
 

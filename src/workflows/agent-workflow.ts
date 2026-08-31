@@ -711,6 +711,86 @@ return [{ json: { ...original, biResult, factSheet } }];
       },
     },
     {
+      id: 'check_dataset_cache',
+      name: 'Check Dataset Cache',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextBiPos(),
+      onError: 'continueRegularOutput',
+      alwaysOutputData: true,
+      parameters: {
+        // RELVA BI 追加要件定義書 §7 — query/refineのたび毎回kintoneへ500件フェッチし直すのを
+        // 避けるためのキャッシュ。無効化は本来kintoneのWebhook(sync-workflow.ts)で即時に行う
+        // 想定だが、そのWebhookがkintone管理画面で実際に登録されているかはこちらのコードから
+        // 保証できない(登録は手動作業 — README参照)ため、5分のTTLを保険として併設する
+        // (webhookが効いていれば即時反映、登録漏れでも最悪5分で自動復旧する)。
+        method: 'GET',
+        url: `${config.supabaseUrl}/rest/v1/dataset_cache`,
+        sendHeaders: true,
+        headerParameters: { parameters: supabaseHeaders() },
+        sendQuery: true,
+        queryParameters: {
+          parameters: [
+            { name: 'cache_key', value: 'in.(opportunity_records,lead_records)' },
+            { name: 'computed_at', value: '={{ "gt." + new Date(Date.now() - 5 * 60 * 1000).toISOString() }}' },
+            { name: 'select', value: 'cache_key,data' },
+          ],
+        },
+        options: {},
+      },
+    },
+    {
+      id: 'collect_dataset_cache_rows',
+      name: 'Collect Dataset Cache Rows',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        // PostgRESTはJSON配列をそのまま返すが、n8nのHTTP Requestノードは配列レスポンスを
+        // 1件ずつ別アイテムに分割する(Supabase Feedback Searchノードの既存コメントと同じ
+        // 挙動)。そのため後続のDataset Cache Hit?で$json.lengthを見ても常に単一行オブジェクト
+        // (配列ではない)しか見えず、キャッシュが実際にヒットしていても誤ってミス判定される
+        // ——ここで元の配列に戻し、1回だけ判定できるようにする(n8nのCode nodeはjsonの値が
+        // 直接配列だと拒否するため、{rows: [...]}のように1段オブジェクトで包む)。
+        mode: 'runOnceForAllItems',
+        jsCode: 'return [{ json: { rows: $input.all().map((item) => item.json) } }];',
+      },
+    },
+    {
+      id: 'dataset_cache_hit_if',
+      name: 'Dataset Cache Hit?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextBiPos(),
+      parameters: {
+        // 案件・リード両方のキャッシュ行が(TTL内で)揃っている場合のみヒットとする——
+        // 無効化は3アプリ(取引先/案件/リード)いずれかの変更で両方まとめて消す設計のため、
+        // 部分的な片方だけヒットは想定しない(Supabase障害時など$jsonが配列でない場合も
+        // ここで安全にミスとして扱われる)。
+        conditions: {
+          boolean: [{ value1: '={{ Array.isArray($json.rows) && $json.rows.length === 2 }}', value2: true }],
+        },
+      },
+    },
+    {
+      id: 'use_cached_datasets',
+      name: 'Use Cached Datasets',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+const original = $node["Parse BI Plan"].json;
+const rows = Array.isArray($json.rows) ? $json.rows : [];
+const byKey = {};
+for (const r of rows) byKey[r.cache_key] = r.data;
+const opportunityRecords = byKey.opportunity_records || [];
+const leadRecords = byKey.lead_records || [];
+return [{ json: { ...original, opportunityRecords, leadRecords } }];
+`.trim(),
+      },
+    },
+    {
       id: 'fetch_bi_opportunities',
       name: 'Fetch BI Opportunities',
       type: 'n8n-nodes-base.httpRequest',
@@ -755,6 +835,59 @@ return [{ json: { ...original, biResult, factSheet } }];
       },
     },
     {
+      id: 'write_dataset_cache',
+      name: 'Write Dataset Cache',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextBiPos(),
+      onError: 'continueRegularOutput',
+      alwaysOutputData: true,
+      parameters: {
+        method: 'POST',
+        url: `${config.supabaseUrl}/rest/v1/dataset_cache`,
+        sendHeaders: true,
+        headerParameters: {
+          parameters: [...supabaseHeaders(), { name: 'Prefer', value: 'resolution=merge-duplicates,return=minimal' }],
+        },
+        sendBody: true,
+        specifyBody: 'json',
+        jsonBody: `={{ JSON.stringify([
+  { cache_key: "opportunity_records", template: "opportunity_records", params: {}, data: $node["Fetch BI Opportunities"].json.records || [], computed_at: new Date().toISOString() },
+  { cache_key: "lead_records", template: "lead_records", params: {}, data: $json.records || [], computed_at: new Date().toISOString() }
+]) }}`,
+        options: {},
+      },
+    },
+    {
+      id: 'build_fetched_datasets',
+      name: 'Build Fetched Datasets',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+const original = $node["Parse BI Plan"].json;
+const opportunityRecords = $node["Fetch BI Opportunities"].json.records || [];
+const leadRecords = $node["Fetch BI Leads"].json.records || [];
+return [{ json: { ...original, opportunityRecords, leadRecords } }];
+`.trim(),
+      },
+    },
+    {
+      id: 'prepare_bi_datasets',
+      name: 'Prepare BI Datasets',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        // Use Cached Datasets(キャッシュヒット)とBuild Fetched Datasets(キャッシュミス→
+        // kintoneから取得)という2つの異なるノードの出力を、Aggregate BIが1つの安定した名前で
+        // 参照できるように集約する恒等ノード。Prepare Final Response / Prepare BI Narrative
+        // Input と全く同じパターン。
+        jsCode: 'return [{ json: $json }];',
+      },
+    },
+    {
       id: 'aggregate_bi',
       name: 'Aggregate BI',
       type: 'n8n-nodes-base.code',
@@ -768,8 +901,10 @@ ${fiscalEmbeddable()}
 const original = $node["Parse BI Plan"].json;
 const plan = original.biPlan;
 
-const opportunityRecords = $node["Fetch BI Opportunities"].json.records || [];
-const leadRecords = $node["Fetch BI Leads"].json.records || [];
+// キャッシュヒット(Use Cached Datasets)・ミス(Build Fetched Datasets)のどちらが実行された
+// かに関わらず、必ず Prepare BI Datasets(集約ノード)を経由した名前で参照する。
+const opportunityRecords = $node["Prepare BI Datasets"].json.opportunityRecords || [];
+const leadRecords = $node["Prepare BI Datasets"].json.leadRecords || [];
 
 // 期間解決(fiscal.ts)・集計(runAggregate)・interpretation/factSheetの組み立てまでを
 // buildBiResult()(aggregateEmbeddable経由で埋め込み済み)にまとめている——
@@ -1474,16 +1609,28 @@ return [{ json: {
     },
     'Format BI Clarify': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
     // narrate(直前のカードについて話す)は集計を一切バイパスする。query/refineは
-    // これまで通りFetch BI Opportunities/Leads→Aggregate BIへ進む。
+    // Check Dataset Cache(§7 — TTL付きキャッシュ)を経由してからkintoneフェッチ/集計へ進む。
     'Is Narrate?': {
       main: [
         [{ node: 'Build Narrate Input', type: 'main', index: 0 }],
-        [{ node: 'Fetch BI Opportunities', type: 'main', index: 0 }],
+        [{ node: 'Check Dataset Cache', type: 'main', index: 0 }],
       ],
     },
     'Build Narrate Input': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
+    'Check Dataset Cache': { main: [[{ node: 'Collect Dataset Cache Rows', type: 'main', index: 0 }]] },
+    'Collect Dataset Cache Rows': { main: [[{ node: 'Dataset Cache Hit?', type: 'main', index: 0 }]] },
+    'Dataset Cache Hit?': {
+      main: [
+        [{ node: 'Use Cached Datasets', type: 'main', index: 0 }],
+        [{ node: 'Fetch BI Opportunities', type: 'main', index: 0 }],
+      ],
+    },
+    'Use Cached Datasets': { main: [[{ node: 'Prepare BI Datasets', type: 'main', index: 0 }]] },
     'Fetch BI Opportunities': { main: [[{ node: 'Fetch BI Leads', type: 'main', index: 0 }]] },
-    'Fetch BI Leads': { main: [[{ node: 'Aggregate BI', type: 'main', index: 0 }]] },
+    'Fetch BI Leads': { main: [[{ node: 'Write Dataset Cache', type: 'main', index: 0 }]] },
+    'Write Dataset Cache': { main: [[{ node: 'Build Fetched Datasets', type: 'main', index: 0 }]] },
+    'Build Fetched Datasets': { main: [[{ node: 'Prepare BI Datasets', type: 'main', index: 0 }]] },
+    'Prepare BI Datasets': { main: [[{ node: 'Aggregate BI', type: 'main', index: 0 }]] },
     'Aggregate BI': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
     'Prepare BI Narrative Input': { main: [[{ node: 'BI Aggregate OK?', type: 'main', index: 0 }]] },
     'BI Aggregate OK?': {
