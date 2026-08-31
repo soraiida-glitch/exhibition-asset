@@ -13,6 +13,7 @@ import { escHtml } from './html-utils';
 // dev/playground からも読み込まれるため、chat.ts 経由ではなく html-utils.ts から直接 import する。
 export { escHtml };
 import { renderBiResult } from './bi-chat';
+import { renderCardControls } from './card-controls';
 import { initBiDashboard } from './dashboard';
 import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
 import { initLeadInsights } from './lead-insights';
@@ -482,6 +483,15 @@ function pushAI(text: string, data?: AgentResponse, question?: string): string {
       (routerQuery) => void handleSend(routerQuery),
       data.cardSpec ? () => void pinCard(data.cardSpec!) : undefined,
     );
+
+    // RELVA BI 追加要件定義書 §3-1 — ワンクリックのリファインチップ。クリックすると
+    // §3-2の例文と全く同じ自然文が送られるだけで、refine自体は既存のrouter/Parse BI Plan
+    // (cards.tsのrefine())をそのまま通る——チップ専用の処理経路は無い。
+    if (data.cardSpec) {
+      const controlsContainer = document.createElement('div');
+      el.appendChild(controlsContainer);
+      renderCardControls(controlsContainer, data.cardSpec, (phrase) => void handleSend(phrase));
+    }
   }
 
   // このメッセージがカードを1枚出したなら「直前のカード」を更新する。BIの質問ではない

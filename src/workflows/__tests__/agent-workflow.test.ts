@@ -76,6 +76,8 @@ interface BiPlanOutput {
     dimensionB?: string;
     period?: string;
     filters?: unknown[];
+    topN?: number;
+    sort?: string;
     needClarify?: string | null;
   };
 }
@@ -105,6 +107,12 @@ describe('Parse BI Plan node', () => {
       filters: [],
       needClarify: null,
     });
+  });
+
+  it('captures topN/sort on a fresh query too, not just refine (e.g. "業種別の受注額を上位5件だけ、多い順で")', () => {
+    const out = run({ template: 'T2', metric: 'amount_sum', dimension: 'industry', topN: 5, sort: 'value_desc', filters: [] });
+    expect(out.biPlan.topN).toBe(5);
+    expect(out.biPlan.sort).toBe('value_desc');
   });
 
   it('accepts a T8 plan with no metric (regression: T8 must not require metric)', () => {
@@ -170,6 +178,25 @@ describe('Parse BI Plan node', () => {
     const out = run({ op: 'refine', dimension: 'industry' }, { message: '業種で見せて', currentCard: null });
     expect(out.biPlan.op).toBe('clarify');
     expect(out.biPlan.needClarify).toMatch(/表示されているグラフが無い/);
+  });
+
+  // RELVA BI 追加要件定義書 §3-1: 「上位N件」「多い順/少ない順」のワンクリックチップ
+  // (card-controls.ts)が実際にbiPlanへ反映されることの回帰テスト——一度、この2フィールドが
+  // refine()を通っても最終plan構築時に落とされ、無視されるバグがあった。
+  it('op:refine carries topN through into the plan (the one-click "上位N件" chip)', () => {
+    const out = run({ op: 'refine', topN: 5 }, { message: '上位5件だけ見せて', currentCard });
+    expect(out.biPlan.topN).toBe(5);
+    expect(out.biPlan.dimension).toBe('owner'); // 維持
+  });
+
+  it('op:refine carries sort through into the plan (the one-click "少ない順" chip)', () => {
+    const out = run({ op: 'refine', sort: 'value_asc' }, { message: '少ない順に並べて', currentCard });
+    expect(out.biPlan.sort).toBe('value_asc');
+  });
+
+  it('op:refine ignores an invalid sort value from the router instead of leaking it through', () => {
+    const out = run({ op: 'refine', sort: 'not_a_real_sort' }, { message: '変な並び順で', currentCard });
+    expect(out.biPlan.sort).toBeUndefined();
   });
 
   it('op:refine still runs the deterministic shape validation on the merged result (e.g. T5 needs 2 dimensions)', () => {
@@ -518,6 +545,13 @@ describe('Format BI Response node', () => {
     const out = run({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, 'not json');
     expect(out.response.biResult.template).toBe('T2');
     expect(out.response.answer).toBe(biResult.interpretation);
+  });
+
+  it('carries topN/sort into cardSpec.params too (so a re-opened card keeps its "上位N件"/並び順 chip state)', () => {
+    const planWithTopN = { ...biPlan, topN: 5, sort: 'value_asc' };
+    const out = run({ biResult, biPlan: planWithTopN, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, JSON.stringify({ narrative: '...' }));
+    expect((out.response.cardSpec.params as { topN?: number; sort?: string }).topN).toBe(5);
+    expect((out.response.cardSpec.params as { topN?: number; sort?: string }).sort).toBe('value_asc');
   });
 });
 

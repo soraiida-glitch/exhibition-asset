@@ -299,6 +299,34 @@ describe('buildBiResult (Aggregate BI・dashboard.ts共通の唯一の変換経�
     expect(outcome.biResult.filtersApplied).toEqual([]); // period:allは絞り込みを一切かけない
   });
 
+  // RELVA BI 追加要件定義書 §3-1: 「上位5件だけ」「多い順/少ない順」のワンクリックチップが
+  // 実際にチャートへ反映されることを保証する回帰テスト(topN/sortはrefine()には既に通っていた
+  // が、buildBiResultが一切適用していなかったため実際にはノーオペレーションだった)。
+  it('applies topN to truncate a T2 series to the top N values (descending by default)', () => {
+    const outcome = buildBiResult(input, { template: 'T2', metric: 'amount_sum', dimension: 'owner', period: 'all', topN: 1 }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const series = (outcome.biResult.data as { series: { key: string; value: number }[] }).series;
+    expect(series).toHaveLength(1);
+    expect(series[0].key).toBe('佐藤'); // 4,200,000 > 鈴木の2,400,000
+  });
+
+  it('applies sort: value_asc to reverse a T2 series (default is value_desc)', () => {
+    const outcome = buildBiResult(input, { template: 'T2', metric: 'amount_sum', dimension: 'owner', period: 'all', sort: 'value_asc' }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const series = (outcome.biResult.data as { series: { key: string; value: number }[] }).series;
+    expect(series.map((s) => s.key)).toEqual(['鈴木', '佐藤']);
+  });
+
+  it('applies topN to a T8 record list when smaller than the default 50-record cap', () => {
+    const outcome = buildBiResult(input, { template: 'T8', period: 'all', topN: 2 }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const records = (outcome.biResult.data as { records: unknown[] }).records;
+    expect(records).toHaveLength(2);
+  });
+
   it('propagates a structured error from runAggregate instead of throwing (e.g. invalid dimension/metric combo)', () => {
     const outcome = buildBiResult(
       input,

@@ -431,6 +431,8 @@ const PERIOD_LABELS: Record<PeriodPreset, string> = {
  * n8n の biPlan(query/refine/narrateいずれも同じ形)、ダッシュボードの CardSpec.params の
  * どちらから来ても、この形に正規化してから渡す(period は文字列プリセットに揃える —
  * TemplateParams.period の `{preset}` オブジェクト形はここでは受け取らない)。 */
+export type SortSpec = 'value_desc' | 'value_asc' | 'label';
+
 export interface BiPlanLike {
   template: TemplateId;
   metric?: MetricCode;
@@ -439,6 +441,22 @@ export interface BiPlanLike {
   filters?: FilterSpec[];
   period?: PeriodPreset;
   entity?: 'opportunity' | 'lead';
+  /** T2/T8のみ有効(cards.tsのALLOWED_PARAM_KEYS参照)。表示直前に上位N件へ絞り込む。 */
+  topN?: number;
+  /** T2のみ有効。既定(未指定)はaggregateByDimensionの並び(値の降順、stage等の
+   * seeded次元だけは意味レイヤーの定義順)をそのまま使う。 */
+  sort?: SortSpec;
+}
+
+/** T2のseries(またはT8の抽出結果)へ sort/topN を適用する。runAggregateの結果そのものは
+ * 変更しない(再集計はしない)——表示直前の並べ替え・絞り込みだけを担う。 */
+function applySortAndTopN(series: DimensionSeriesPoint[], sort: SortSpec | undefined, topN: number | undefined): DimensionSeriesPoint[] {
+  let out = series;
+  if (sort === 'value_asc') out = [...out].sort((a, b) => a.value - b.value);
+  else if (sort === 'value_desc') out = [...out].sort((a, b) => b.value - a.value);
+  else if (sort === 'label') out = [...out].sort((a, b) => a.key.localeCompare(b.key, 'ja'));
+  if (typeof topN === 'number' && topN > 0) out = out.slice(0, topN);
+  return out;
 }
 
 export interface BuiltBiResult {
@@ -521,10 +539,11 @@ export function buildBiResult(
     data = { value: scaleForDisplay(plan.metric, (result.data as { value: number }).value), unit: METRIC_UNITS[plan.metric || ''] || '' };
   } else if (plan.template === 'T2') {
     title = title + `(${DIMENSION_LABELS[plan.dimension || ''] || plan.dimension}別)`;
-    const series = (result.data as { series: DimensionSeriesPoint[] }).series.map((s) => ({
+    const scaledSeries = (result.data as { series: DimensionSeriesPoint[] }).series.map((s) => ({
       key: s.key,
       value: scaleForDisplay(plan.metric, s.value),
     }));
+    const series = applySortAndTopN(scaledSeries, plan.sort, plan.topN);
     data = { metric: toMetricView(plan.metric || ''), dimension: toDimView(plan.dimension || ''), series };
   } else if (plan.template === 'T4') {
     title = title + '(パイプライン)';
@@ -538,8 +557,10 @@ export function buildBiResult(
     const matrix = (result.data as CrossTabResult).matrix.map((m) => ({ row: m.row, col: m.col, value: scaleForDisplay(plan.metric, m.value) }));
     data = { metric: toMetricView(plan.metric || ''), rows: toDimView(plan.dimension || ''), cols: toDimView(plan.dimensionB || ''), matrix };
   } else {
-    // T8
-    data = result.data as Record<string, unknown>;
+    // T8。runAggregate自体は既に固定で50件まで絞っているため、topNがそれより小さい場合
+    // だけ追加で絞り込む(topN未指定・50件以上ならそのまま)。
+    const t8Data = result.data as { columns: string[]; records: Record<string, string>[] };
+    data = typeof plan.topN === 'number' && plan.topN > 0 ? { ...t8Data, records: t8Data.records.slice(0, plan.topN) } : t8Data;
   }
 
   const factSheet = buildFactSheet(plan.template, plan.metric, title, data);
@@ -579,6 +600,7 @@ export function aggregateEmbeddable(): string {
     runAggregate,
     formatMetricValueForFactSheet,
     buildFactSheet,
+    applySortAndTopN,
     buildBiResult,
   ].map((fn) => fn.toString());
   return [shim, ...consts, ...fns].join('\n');

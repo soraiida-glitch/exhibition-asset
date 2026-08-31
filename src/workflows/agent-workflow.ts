@@ -668,6 +668,7 @@ const DIMENSION_FIELD_MAP = {
 };
 const TEMPLATE_IDS = ["T1", "T2", "T4", "T5", "T8"];
 const PERIODS = ["current_fiscal_year", "current_month", "last_month", "all"];
+const SORTS = ["value_desc", "value_asc", "label"];
 
 let raw;
 try {
@@ -732,6 +733,8 @@ if (op === "clarify") {
       dimensionB: p.dimensionB || undefined,
       period: p.period && p.period.preset ? p.period.preset : "current_fiscal_year",
       filters: p.filters || [],
+      topN: p.topN,
+      sort: p.sort,
       needClarify: null,
     };
   }
@@ -746,8 +749,8 @@ if (op === "clarify") {
     if (raw.dimensionB) patch.dimensionB = raw.dimensionB;
     if (Array.isArray(raw.filters) && raw.filters.length > 0) patch.filters = sanitizeFilters(raw.filters);
     if (raw.period && PERIODS.indexOf(raw.period) !== -1) patch.period = { preset: raw.period };
-    if (typeof raw.topN === "number") patch.topN = raw.topN;
-    if (raw.sort) patch.sort = raw.sort;
+    if (typeof raw.topN === "number" && raw.topN > 0) patch.topN = raw.topN;
+    if (raw.sort && SORTS.indexOf(raw.sort) !== -1) patch.sort = raw.sort;
 
     const merged = refine(currentCard.template, currentCard.params || {}, patch);
     const invalidMsg = validateShape(currentCard.template, merged.metric, merged.dimension, merged.dimensionB);
@@ -763,6 +766,8 @@ if (op === "clarify") {
         dimensionB: merged.dimensionB || undefined,
         period: merged.period && merged.period.preset ? merged.period.preset : "current_fiscal_year",
         filters: merged.filters || [],
+        topN: merged.topN,
+        sort: merged.sort,
         needClarify: null,
       };
     }
@@ -785,6 +790,8 @@ if (op === "clarify") {
       dimensionB: raw.dimensionB || undefined,
       period: PERIODS.indexOf(raw.period) !== -1 ? raw.period : "current_fiscal_year",
       filters: sanitizeFilters(raw.filters),
+      topN: typeof raw.topN === "number" && raw.topN > 0 ? raw.topN : undefined,
+      sort: raw.sort && SORTS.indexOf(raw.sort) !== -1 ? raw.sort : undefined,
       needClarify: null,
     };
   }
@@ -1211,6 +1218,8 @@ const cardSpec = {
     dimensionB: plan.dimensionB,
     filters: plan.filters || [],
     period: plan.period ? { preset: plan.period } : undefined,
+    topN: plan.topN,
+    sort: plan.sort,
   },
   title: biResult.title,
   interpretation: biResult.interpretation,
