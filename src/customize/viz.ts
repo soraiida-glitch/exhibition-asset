@@ -1,4 +1,8 @@
-import { escHtml } from './chat';
+// chat.ts の再export(`export { escHtml }`)経由ではなく html-utils.ts から直接importする——
+// chat.ts はモジュールトップレベルで __WEBHOOK_URL__ 等のビルド定数を参照するため、chat.ts
+// を経由するインポートチェーンはvite buildの外(vitest等)で評価するとクラッシュする実害が
+// あった(chart-builder.test.tsがviz.ts→chat.ts経由でこれを踏んだ)。
+import { escHtml } from './html-utils';
 import { THEME } from './theme';
 
 export interface KpiItem {

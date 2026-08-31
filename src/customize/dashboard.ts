@@ -25,6 +25,7 @@ import type { PeriodPreset } from '../semantic/fiscal';
 import type { BiResult, TemplateId } from '../semantic/templates';
 import { renderBiChart } from './bi-chat';
 import { formatApiError } from './chat';
+import { renderChartBuilder } from './chart-builder';
 import { formatMetricNumber } from './format-utils';
 import { getOrCreateSpaceWidgetRow } from './space-dashboard';
 import { THEME, injectFontStyles } from './theme';
@@ -144,6 +145,19 @@ async function unpinCard(cardId: string): Promise<void> {
   await callAgentWebhook<{ success: boolean }>({
     message: '__unpin_card__',
     cardId,
+    sessionId: 'dashboard',
+    userId: user.id,
+    userName: user.name,
+  });
+}
+
+/** グラフビルダー(chart-builder.ts)で作成したカードをピン留めする。チャット側のpinCard()と
+ * 同じ__pin_card__エンドポイントを使う(入口が2つ、処理は1本——§3の原則をここでも守る)。 */
+async function pinCardFromBuilder(card: ChatCardState): Promise<void> {
+  const user = kintone.getLoginUser();
+  await callAgentWebhook<{ success: boolean }>({
+    message: '__pin_card__',
+    cardSpec: card,
     sessionId: 'dashboard',
     userId: user.id,
     userName: user.name,
@@ -369,6 +383,18 @@ async function render(container: HTMLElement): Promise<void> {
       renderCard(grid, card, datasets, today, { pinnedCardId: row.id, fullWidth });
     }
   }
+
+  // RELVA BI 追加要件定義書 §3・§6 — Power BIのような「軸を選んでグラフを作る」体験を、
+  // 意味レイヤーの検証済み項目の範囲内で提供する(自由なフィールド選択ではなく、
+  // ガードレール内での組み立て)。固定6枚・ピン留めカードの下に常設する。
+  const builderContainer = document.createElement('div');
+  grid.appendChild(builderContainer);
+  renderChartBuilder(builderContainer, datasets, today, {
+    onPin: async (card) => {
+      await pinCardFromBuilder(card);
+      await render(container); // ピン留め直後に一覧へ反映する
+    },
+  });
 }
 
 export function initBiDashboard(): void {
