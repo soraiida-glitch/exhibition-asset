@@ -24,13 +24,16 @@ import { resolvePeriodPreset, type PeriodPreset } from '../semantic/fiscal';
 import type { PayloadFor, TemplateId } from '../semantic/templates';
 import { renderBarH } from './charts/barH';
 import { renderBarV } from './charts/barV';
+import { renderComboChart, type ComboSeriesInput } from './charts/comboChart';
 import { renderCrossTabBar } from './charts/crossTabBar';
 import { renderDonut } from './charts/donut';
 import { renderFunnel } from './charts/funnel';
+import { renderGauge } from './charts/gauge';
 import { renderHeatmap } from './charts/heatmap';
 import { renderKpiCard } from './charts/kpiCard';
-import { renderLineChart } from './charts/lineChart';
+import { renderAreaChart, renderLineChart } from './charts/lineChart';
 import { renderRecordList } from './charts/recordList';
+import { renderScatter } from './charts/scatter';
 import { THEME } from './theme';
 import { renderVizError } from './viz';
 
@@ -43,10 +46,15 @@ import { renderVizError } from './viz';
  */
 export type BuilderVisual =
   | 'kpi'
+  | 'gauge'
   | 'bar_h'
   | 'bar_v'
   | 'donut'
+  | 'area'
+  | 'scatter'
   | 'trend_line'
+  | 'trend_area'
+  | 'combo_bar_line'
   | 'funnel'
   | 'crosstab_heatmap'
   | 'crosstab_grouped_h'
@@ -60,14 +68,24 @@ interface VisualDef {
   label: string;
   template: TemplateId;
   timeGranularity?: 'month';
+  /** 集計をせずレコード1件=1点として並べる(散布図)。 */
+  scatter?: boolean;
+  /** 棒+折れ線の2指標コンボ。buildBiResultを2回呼ぶ特別な組み立てが必要なため、
+   * renderVisual()の通常経路(1回のbiResultを描くだけ)には乗らない。 */
+  combo?: boolean;
 }
 
 const VISUALS: VisualDef[] = [
   { code: 'kpi', label: '数値カード', template: 'T1' },
+  { code: 'gauge', label: 'ゲージ', template: 'T1' },
   { code: 'bar_h', label: 'カテゴリ別・横棒グラフ', template: 'T2' },
   { code: 'bar_v', label: 'カテゴリ別・縦棒グラフ', template: 'T2' },
   { code: 'donut', label: 'カテゴリ別・円グラフ(ドーナツ)', template: 'T2' },
+  { code: 'area', label: 'カテゴリ別・面グラフ', template: 'T2' },
+  { code: 'scatter', label: 'カテゴリ別・散布図(案件1件ごとの金額)', template: 'T2', scatter: true },
   { code: 'trend_line', label: '月別推移(折れ線)', template: 'T2', timeGranularity: 'month' },
+  { code: 'trend_area', label: '月別推移(面グラフ)', template: 'T2', timeGranularity: 'month' },
+  { code: 'combo_bar_line', label: 'コンボ(棒+折れ線・2指標重ね表示)', template: 'T2', combo: true },
   { code: 'funnel', label: 'パイプライン(ファネル)', template: 'T4' },
   { code: 'crosstab_heatmap', label: 'クロス集計・ヒートマップ', template: 'T5' },
   { code: 'crosstab_grouped_h', label: 'クロス集計・集合横棒', template: 'T5' },
@@ -103,6 +121,8 @@ export interface BuilderFieldVisibility {
   metric: boolean;
   topN: boolean;
   sort: boolean;
+  /** コンボ(棒+折れ線)専用の「第2の指標」欄。T2の他の見た目では常にfalse。 */
+  comboMetric: boolean;
 }
 
 export function builderFieldsFor(template: TemplateId): BuilderFieldVisibility {
@@ -114,6 +134,7 @@ export function builderFieldsFor(template: TemplateId): BuilderFieldVisibility {
     metric: allowed.includes('metric'),
     topN: allowed.includes('topN'),
     sort: allowed.includes('sort'),
+    comboMetric: false,
   };
 }
 
@@ -125,6 +146,15 @@ export function fieldsForVisual(visual: BuilderVisual): BuilderFieldVisibility {
   const fields = builderFieldsFor(def.template);
   if (def.timeGranularity) {
     return { ...fields, dimension: false, entity: false, sort: false };
+  }
+  if (def.scatter) {
+    // 散布図はY軸(金額)を固定するため指標選択を出さない——切り口(X軸)は選ぶ。
+    return { ...fields, metric: false, topN: false, sort: false };
+  }
+  if (def.combo) {
+    // コンボは指標を2つ選ぶ(1本目=棒、2本目=折れ線)。上位N件・並び順は2系列の対応が
+    // 崩れるため出さない(2つの指標で「上位」の基準が食い違ってしまうため)。
+    return { ...fields, comboMetric: true, topN: false, sort: false };
   }
   return fields;
 }
@@ -219,14 +249,22 @@ export function renderVisual(
       chartHost.style.height = 'auto';
       renderKpiCard(chartHost, biResult.data as PayloadFor<'T1'>);
       return () => undefined;
+    case 'gauge':
+      return renderGauge(chartHost, biResult.data as PayloadFor<'T1'>);
     case 'bar_h':
       return renderBarH(chartHost, biResult.data as PayloadFor<'T2'>);
     case 'bar_v':
       return renderBarV(chartHost, biResult.data as PayloadFor<'T2'>);
     case 'donut':
       return renderDonut(chartHost, biResult.data as PayloadFor<'T2'>);
+    case 'area':
+      return renderAreaChart(chartHost, biResult.data as PayloadFor<'T2'>);
+    case 'scatter':
+      return renderScatter(chartHost, biResult.data as PayloadFor<'T2'>);
     case 'trend_line':
       return renderLineChart(chartHost, biResult.data as PayloadFor<'T2'>);
+    case 'trend_area':
+      return renderAreaChart(chartHost, biResult.data as PayloadFor<'T2'>);
     case 'funnel':
       return renderFunnel(chartHost, biResult.data as PayloadFor<'T4'>);
     case 'crosstab_heatmap':
@@ -284,6 +322,83 @@ export function resolveVisual(template: TemplateId, visual: string | undefined):
   return defaultVisualFor(template);
 }
 
+export function isComboVisual(visual: BuilderVisual): boolean {
+  return visualDefOf(visual).combo === true;
+}
+
+function periodPresetOfParams(params: TemplateParams): PeriodPreset {
+  const p = params.period;
+  return p && 'preset' in p ? p.preset : 'current_fiscal_year';
+}
+
+export interface ComboResult {
+  bar: ComboSeriesInput;
+  line: ComboSeriesInput;
+  title: string;
+  interpretation: string;
+  filtersApplied: { label: string; value: string }[];
+  /** 「このグラフについて聞く」用の代表データ(棒=1本目の指標の集計結果)。コンボ全体を
+   * 1つのT2データとして表現できないため、narrate/factSheetは1本目の指標だけを見て話す
+   * ——2本とも詳しく話せるようにするより、既存のbuildFactSheet(PayloadFor<'T2'>前提)を
+   * そのまま安全に使えることを優先した割り切り。 */
+  primaryData: PayloadFor<'T2'>;
+}
+export type ComboOutcome = { ok: true; result: ComboResult } | { ok: false; message: string };
+
+/**
+ * 棒(metric)+折れ線(comboMetric)のコンボチャートを組み立てる。buildBiResultを指標ごとに
+ * 2回呼ぶだけで、集計ロジック自体は他のT2カードと完全に同じ——2回分の結果を1つのグラフに
+ * まとめる部分だけがコンボ特有の処理。dashboard.ts(ピン留めカードの再描画)と
+ * このファイル自身(プレビュー)の両方から呼ぶ。
+ */
+export function buildComboOutcome(
+  datasets: { opportunityRecords: KintoneRecordFields[]; leadRecords: KintoneRecordFields[] },
+  params: TemplateParams,
+  today: Date,
+): ComboOutcome {
+  if (!params.metric || !params.comboMetric) {
+    return { ok: false, message: '2つの指標を選んでください。' };
+  }
+  const shared = {
+    template: 'T2' as const,
+    dimension: params.dimension,
+    period: periodPresetOfParams(params),
+    filters: params.filters,
+  };
+  const outcomeA = buildBiResult(datasets, { ...shared, metric: params.metric }, today, resolvePeriodPreset);
+  if (!outcomeA.ok) return { ok: false, message: outcomeA.message };
+  const outcomeB = buildBiResult(datasets, { ...shared, metric: params.comboMetric }, today, resolvePeriodPreset);
+  if (!outcomeB.ok) return { ok: false, message: outcomeB.message };
+
+  const dataA = outcomeA.biResult.data as PayloadFor<'T2'>;
+  const dataB = outcomeB.biResult.data as PayloadFor<'T2'>;
+  return {
+    ok: true,
+    result: {
+      bar: { metricLabel: dataA.metric.label, metricUnit: dataA.metric.unit, series: dataA.series },
+      line: { metricLabel: dataB.metric.label, metricUnit: dataB.metric.unit, series: dataB.series },
+      title: `${outcomeA.biResult.title} / ${outcomeB.biResult.title}`,
+      interpretation: `${outcomeA.biResult.interpretation} ${outcomeB.biResult.interpretation}`,
+      filtersApplied: outcomeA.biResult.filtersApplied,
+      primaryData: dataA,
+    },
+  };
+}
+
+/** ComboResultをrenderComboChart()で描画する。renderVisual()と同じ理由でクラス名を
+ * 引数化している(dashboard.tsとこのファイルの両方から使うため)。 */
+export function renderCombo(
+  container: HTMLElement,
+  result: ComboResult,
+  hostClassName = 'exh-bi-chart-host',
+  tallClassName = 'exh-bi-chart-tall',
+): () => void {
+  const chartHost = document.createElement('div');
+  chartHost.className = `${hostClassName} ${tallClassName}`;
+  container.appendChild(chartHost);
+  return renderComboChart(chartHost, result.bar, result.line);
+}
+
 export interface ChartBuilderCallbacks {
   /** 「📌 ダッシュボードにピン留め」押下時に呼ばれる。成功したら呼び出し側でダッシュボードを再描画する。 */
   onPin: (card: ChatCardState) => Promise<void>;
@@ -333,6 +448,9 @@ export function renderChartBuilder(
   const metricField = makeField('指標(Y軸)');
   fieldsRow.appendChild(metricField.wrap);
 
+  const comboMetricField = makeField('第2の指標(折れ線)');
+  fieldsRow.appendChild(comboMetricField.wrap);
+
   const periodField = makeField('期間');
   setOptions(periodField.select, PERIOD_OPTIONS);
   fieldsRow.appendChild(periodField.wrap);
@@ -370,6 +488,7 @@ export function renderChartBuilder(
     dimensionField.wrap.style.display = fields.dimension ? '' : 'none';
     dimensionBField.wrap.style.display = fields.dimensionB ? '' : 'none';
     metricField.wrap.style.display = fields.metric ? '' : 'none';
+    comboMetricField.wrap.style.display = fields.comboMetric ? '' : 'none';
     topNField.wrap.style.display = fields.topN ? '' : 'none';
     sortField.wrap.style.display = fields.sort ? '' : 'none';
 
@@ -397,10 +516,11 @@ export function renderChartBuilder(
   // 指標は、選ばれている切り口がリード側ならcountだけに絞る(runAggregateの制約と同じ)。
   // 月別推移(次元を使わない)はcloseDateが案件にしか無いため常に全指標を候補にする。
   function syncMetricOptions(): void {
-    if (metricField.wrap.style.display === 'none') return;
     const fields = fieldsForVisual(visualField.select.value as BuilderVisual);
     const dim = fields.dimension ? (dimensionField.select.value as DimensionCode | '') : undefined;
-    setOptions(metricField.select, metricOptionsFor(dim || undefined).map((m) => ({ value: m.code, label: m.label })));
+    const options = metricOptionsFor(dim || undefined).map((m) => ({ value: m.code, label: m.label }));
+    if (metricField.wrap.style.display !== 'none') setOptions(metricField.select, options);
+    if (fields.comboMetric) setOptions(comboMetricField.select, options);
   }
 
   visualField.select.addEventListener('change', syncFieldVisibility);
@@ -411,68 +531,9 @@ export function renderChartBuilder(
 
   syncFieldVisibility();
 
-  buildBtn.addEventListener('click', () => {
-    const visual = visualField.select.value as BuilderVisual;
-    const visualDef = visualDefOf(visual);
-    const fields = fieldsForVisual(visual);
-    const params: TemplateParams = {
-      period: { preset: periodField.select.value as PeriodPreset },
-    };
-    if (visualDef.timeGranularity) params.timeGranularity = visualDef.timeGranularity;
-    if (fields.entity) params.entity = entityField.select.value as 'opportunity' | 'lead';
-    if (fields.dimension) params.dimension = dimensionField.select.value as DimensionCode;
-    if (fields.dimensionB) params.dimensionB = dimensionBField.select.value as DimensionCode;
-    if (fields.metric) params.metric = metricField.select.value as MetricCode;
-    if (fields.topN && topNInput.value) params.topN = Number(topNInput.value);
-    if (fields.sort) params.sort = sortField.select.value as SortSpec;
-    // 見た目(横棒/縦棒/ヒートマップ/集合棒/積み上げ棒等)もパラメータの一部として保存する
-    // ——ピン留め後にダッシュボードを開き直しても、選んだ見た目のまま再描画するため
-    // (dashboard.tsのrenderCard()がparams.visualを見てrenderVisual()を呼ぶ)。
-    params.visual = visual;
-
-    const outcome = buildBiResult(
-      datasets,
-      {
-        template: visualDef.template,
-        metric: params.metric as MetricCode,
-        dimension: params.dimension,
-        dimensionB: params.dimensionB,
-        filters: [],
-        period: periodField.select.value as PeriodPreset,
-        entity: params.entity,
-        topN: params.topN,
-        sort: params.sort,
-        timeGranularity: params.timeGranularity,
-      },
-      today,
-      resolvePeriodPreset,
-    );
-
-    disposePreview?.();
-    previewWrap.style.display = '';
-    previewWrap.innerHTML = '';
-
-    if (!outcome.ok) {
-      renderVizError(previewWrap, outcome.message);
-      return;
-    }
-
-    const previewTitleEl = document.createElement('div');
-    previewTitleEl.className = 'exh-chart-builder-preview-title';
-    previewTitleEl.textContent = outcome.biResult.title;
-    previewWrap.appendChild(previewTitleEl);
-
-    disposePreview = renderVisual(previewWrap, visual, outcome.biResult);
-
-    const cardState: ChatCardState = {
-      template: visualDef.template,
-      params,
-      title: outcome.biResult.title,
-      interpretation: outcome.biResult.interpretation,
-      filtersApplied: outcome.biResult.filtersApplied,
-      data: outcome.biResult.data,
-    };
-
+  // プレビュー下の「📌 ダッシュボードにピン留め」ボタン。単一グラフ・コンボの両方から呼ぶ
+  // (押した後の挙動はどちらも同じ——onPin()を呼んで完了メッセージに切り替えるだけ)。
+  function appendPinButton(cardState: ChatCardState): void {
     const pinBtn = document.createElement('button');
     pinBtn.type = 'button';
     pinBtn.className = 'exh-chart-builder-pin-btn';
@@ -491,5 +552,93 @@ export function renderChartBuilder(
         });
     });
     previewWrap.appendChild(pinBtn);
+  }
+
+  buildBtn.addEventListener('click', () => {
+    const visual = visualField.select.value as BuilderVisual;
+    const visualDef = visualDefOf(visual);
+    const fields = fieldsForVisual(visual);
+    const params: TemplateParams = {
+      period: { preset: periodField.select.value as PeriodPreset },
+      visual, // ピン留め後も選んだ見た目のまま再描画するため(dashboard.tsのrenderCard参照)。
+    };
+    if (visualDef.timeGranularity) params.timeGranularity = visualDef.timeGranularity;
+    if (fields.entity) params.entity = entityField.select.value as 'opportunity' | 'lead';
+    if (fields.dimension) params.dimension = dimensionField.select.value as DimensionCode;
+    if (fields.dimensionB) params.dimensionB = dimensionBField.select.value as DimensionCode;
+    if (fields.metric) params.metric = metricField.select.value as MetricCode;
+    if (fields.comboMetric) params.comboMetric = comboMetricField.select.value as MetricCode;
+    if (fields.topN && topNInput.value) params.topN = Number(topNInput.value);
+    if (fields.sort) params.sort = sortField.select.value as SortSpec;
+
+    disposePreview?.();
+    previewWrap.style.display = '';
+    previewWrap.innerHTML = '';
+
+    // コンボ(棒+折れ線)は指標を2回集計する特別な組み立てが必要——buildBiResultを1回だけ
+    // 呼ぶ通常経路とは別に処理する。
+    if (visualDef.combo) {
+      const comboOutcome = buildComboOutcome(datasets, params, today);
+      if (!comboOutcome.ok) {
+        renderVizError(previewWrap, comboOutcome.message);
+        return;
+      }
+      const previewTitleEl = document.createElement('div');
+      previewTitleEl.className = 'exh-chart-builder-preview-title';
+      previewTitleEl.textContent = comboOutcome.result.title;
+      previewWrap.appendChild(previewTitleEl);
+
+      disposePreview = renderCombo(previewWrap, comboOutcome.result);
+
+      appendPinButton({
+        template: 'T2',
+        params,
+        title: comboOutcome.result.title,
+        interpretation: comboOutcome.result.interpretation,
+        filtersApplied: comboOutcome.result.filtersApplied,
+        data: comboOutcome.result.primaryData,
+      });
+      return;
+    }
+
+    const outcome = buildBiResult(
+      datasets,
+      {
+        template: visualDef.template,
+        metric: params.metric as MetricCode,
+        dimension: params.dimension,
+        dimensionB: params.dimensionB,
+        filters: [],
+        period: periodField.select.value as PeriodPreset,
+        entity: params.entity,
+        topN: params.topN,
+        sort: params.sort,
+        timeGranularity: params.timeGranularity,
+        scatter: visualDef.scatter,
+      },
+      today,
+      resolvePeriodPreset,
+    );
+
+    if (!outcome.ok) {
+      renderVizError(previewWrap, outcome.message);
+      return;
+    }
+
+    const previewTitleEl = document.createElement('div');
+    previewTitleEl.className = 'exh-chart-builder-preview-title';
+    previewTitleEl.textContent = outcome.biResult.title;
+    previewWrap.appendChild(previewTitleEl);
+
+    disposePreview = renderVisual(previewWrap, visual, outcome.biResult);
+
+    appendPinButton({
+      template: visualDef.template,
+      params,
+      title: outcome.biResult.title,
+      interpretation: outcome.biResult.interpretation,
+      filtersApplied: outcome.biResult.filtersApplied,
+      data: outcome.biResult.data,
+    });
   });
 }

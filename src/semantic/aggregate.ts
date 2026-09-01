@@ -200,6 +200,17 @@ export function aggregateByDimension(
   return seeded ? entries : entries.sort((a, b) => b.value - a.value);
 }
 
+/**
+ * T2と同じ形(DimensionSeriesPoint[])だが、カテゴリごとに集計(合計・平均等)するのではなく
+ * レコード1件につき1点をそのまま返す——散布図(ユーザー要望)向け。amountは案件で唯一の
+ * 数値フィールドのため、Y軸はamountに固定している(win_rate等の「複数レコードにまたがる
+ * 比率」はレコード単位では意味を持たないため、そもそも選択肢に出さない——chart-builder.ts
+ * 側でmetric選択欄自体を隠す)。
+ */
+export function extractRecordPoints(records: KintoneRecordFields[], dimensionField: string): DimensionSeriesPoint[] {
+  return records.map((r) => ({ key: fieldStr(r, dimensionField) || '(未設定)', value: fieldNum(r, 'amount') }));
+}
+
 /** 絶対日付レンジ("YYYY-MM-DD"〜"YYYY-MM-DD")に含まれる月バケットのラベルを時系列順に
  * 生成する("YYYY-MM"形式)。36ヶ月(3年)で打ち切る——period:allのような超長期間の
  * レンジでもバケット数が暴走しない安全弁(月別推移は元々「直近の傾向を見る」用途のため、
@@ -497,6 +508,10 @@ export interface BiPlanLike {
    * バケット化した「月別推移」集計(aggregateByMonth)になる——dimensionとtimeGranularity
    * は同時に指定しない想定(呼び出し側=chart-builder.tsが排他的に選ばせる)。 */
   timeGranularity?: 'month';
+  /** T2のみ有効。指定すると集計(合計・平均等)をせず、dimensionのカテゴリごとにレコード
+   * 1件=1点として並べる(散布図向け)。timeGranularityと同様、dimensionと排他的な集計方式の
+   * 切り替えフラグ——呼び出し側(chart-builder.ts)が排他的に選ばせる。 */
+  scatter?: boolean;
 }
 
 /** T2のseries(またはT8の抽出結果)へ sort/topN を適用する。runAggregateの結果そのものは
@@ -578,12 +593,60 @@ function buildMonthlyTrendResult(
   return { ok: true, biResult, factSheet };
 }
 
+/**
+ * 「散布図」(T2 + scatter: true)専用の組み立て。dimensionのカテゴリごとに集計するのでは
+ * なく、レコード1件=1点として並べる(extractRecordPoints)。金額(amount)以外の数値
+ * フィールドが案件に無いため、Y軸は常にamount_sum相当に固定する——複数レコードにまたがる
+ * 比率(win_rate等)はレコード単位では意味を持たないため、そもそも選ばせない。
+ */
+function buildScatterResult(
+  input: RunAggregateInput,
+  plan: BiPlanLike,
+  today: Date,
+  resolvePeriod: (preset: PeriodPreset, today: Date) => FiscalYearRange | null,
+): BuildBiResultOutcome {
+  const dim = plan.dimension ? DIMENSION_FIELD_MAP[plan.dimension] : undefined;
+  if (!dim) return { ok: false, message: '何を軸に散布図を見たいか教えていただけますか?' };
+  if (dim.targetApp === 'lead') return { ok: false, message: 'リードには金額フィールドが無いため、散布図は案件のみ対応しています。' };
+
+  const period = plan.period || 'current_fiscal_year';
+  const range = resolvePeriod(period, today);
+  const periodFilter: FilterSpec | null = range ? { field: 'close_date', op: 'range', value: range } : null;
+  const filters = plan.filters ? plan.filters.slice() : [];
+  if (periodFilter) filters.push(periodFilter);
+
+  const filtered = applyFilters(input.opportunityRecords, filters);
+  const series = extractRecordPoints(filtered, dim.field);
+
+  const title = `金額(${DIMENSION_LABELS[plan.dimension || ''] || plan.dimension}別・散布図)`;
+  const filtersApplied: { label: string; value: string }[] = [];
+  if (periodFilter) {
+    const r = periodFilter.value as { start: string; end: string };
+    filtersApplied.push({ label: '期間', value: `${PERIOD_LABELS[period] || period}(${r.start}〜${r.end})` });
+  }
+  for (const f of plan.filters || []) {
+    filtersApplied.push({ label: DIMENSION_LABELS[f.field] || f.field, value: Array.isArray(f.value) ? f.value.join('・') : String(f.value) });
+  }
+  const interpretation = `${DIMENSION_LABELS[plan.dimension || ''] || plan.dimension}別に、案件1件ごとの金額を並べました(${series.length}件)。`;
+  const data = {
+    metric: { code: 'amount_sum', label: '金額', unit: '円' },
+    dimension: { code: plan.dimension || '', label: DIMENSION_LABELS[plan.dimension || ''] || plan.dimension || '' },
+    series,
+  };
+  const factSheet = `${series.length}件の案件を${DIMENSION_LABELS[plan.dimension || ''] || plan.dimension}別に金額でプロットしました。`;
+  const biResult: BuiltBiResult = { template: 'T2', title, interpretation, filtersApplied, data, narrative: '' };
+  return { ok: true, biResult, factSheet };
+}
+
 export function buildBiResult(
   input: RunAggregateInput,
   plan: BiPlanLike,
   today: Date,
   resolvePeriod: (preset: PeriodPreset, today: Date) => FiscalYearRange | null,
 ): BuildBiResultOutcome {
+  if (plan.template === 'T2' && plan.scatter) {
+    return buildScatterResult(input, plan, today, resolvePeriod);
+  }
   // 月別推移(timeGranularity: 'month')は、カテゴリの等値比較(dimension)ではなく
   // close_dateの月バケット化(aggregateByMonth)を使う——通常のrunAggregate経路とは
   // 集計方法そのものが異なるため、ここで別関数に分ける。
@@ -702,6 +765,7 @@ export function aggregateEmbeddable(): string {
     applyFilters,
     computeMetric,
     aggregateByDimension,
+    extractRecordPoints,
     monthBucketsInRange,
     aggregateByMonth,
     aggregateFunnel,
@@ -712,6 +776,7 @@ export function aggregateEmbeddable(): string {
     buildFactSheet,
     applySortAndTopN,
     buildMonthlyTrendResult,
+    buildScatterResult,
     buildBiResult,
   ].map((fn) => fn.toString());
   return [shim, ...consts, ...fns].join('\n');

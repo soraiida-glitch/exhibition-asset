@@ -238,6 +238,38 @@ describe('buildBiResult: 月別推移(timeGranularity: "month")', () => {
   });
 });
 
+describe('buildBiResult: 散布図(scatter: true)', () => {
+  const today = new Date(2026, 7, 30); // 2026-08-30 -> 今期 2026-04-01〜2027-03-31
+  const input = { opportunityRecords: OPPORTUNITIES, leadRecords: [] };
+
+  it('produces one point per record (not a per-category aggregate) within the fiscal-year period', () => {
+    const outcome = buildBiResult(input, { template: 'T2', dimension: 'owner', period: 'current_fiscal_year', scatter: true }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const data = outcome.biResult.data as { series: { key: string; value: number }[] };
+    // 今期(2026-04-01〜2027-03-31)に入るのは8件中6件(2025-12-01・close_date空の2件は除外)。
+    expect(data.series).toHaveLength(6);
+    expect(data.series).toEqual([
+      { key: '佐藤', value: 1_000_000 },
+      { key: '佐藤', value: 2_000_000 },
+      { key: '鈴木', value: 500_000 },
+      { key: '鈴木', value: 300_000 },
+      { key: '鈴木', value: 1_500_000 },
+      { key: '佐藤', value: 400_000 },
+    ]);
+  });
+
+  it('requires a dimension (no axis to plot record points against without one)', () => {
+    const outcome = buildBiResult(input, { template: 'T2', period: 'current_fiscal_year', scatter: true }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(false);
+  });
+
+  it('rejects a lead-side dimension (leads have no amount field to plot)', () => {
+    const outcome = buildBiResult(input, { template: 'T2', dimension: 'lead_source', period: 'current_fiscal_year', scatter: true }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(false);
+  });
+});
+
 describe('aggregateCrossTab', () => {
   it('cross-tabs loss_reason x industry on stage=失注-filtered records (the flagship T5 case)', () => {
     const lost = applyFilters(OPPORTUNITIES, [{ field: 'stage', op: '=', value: '失注' }]);

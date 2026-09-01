@@ -25,7 +25,7 @@ import type { PeriodPreset } from '../semantic/fiscal';
 import type { BiResult, TemplateId } from '../semantic/templates';
 import { renderBiChart } from './bi-chat';
 import { formatApiError } from './chat';
-import { renderChartBuilder, renderVisual, resolveVisual } from './chart-builder';
+import { renderChartBuilder, renderCombo, renderVisual, resolveVisual, buildComboOutcome, isComboVisual } from './chart-builder';
 import { formatMetricNumber } from './format-utils';
 import { getOrCreateSpaceWidgetRow } from './space-dashboard';
 import { THEME, injectFontStyles } from './theme';
@@ -221,6 +221,44 @@ interface RenderCardOptions {
   fullWidth?: boolean;
 }
 
+/** 「🗨️ このグラフについて聞く」「📌 ピン解除」の操作行。通常カード・コンボカードの
+ * どちらのrenderCard経路からも同じ形で呼べるよう、chatCardStateを引数として受け取る。 */
+function renderCardActions(
+  cardEl: HTMLElement,
+  chatCardState: ChatCardState,
+  opts: RenderCardOptions,
+): void {
+  const actionsRow = document.createElement('div');
+  actionsRow.className = 'exh-bi-dashboard-card-actions';
+  cardEl.appendChild(actionsRow);
+
+  const askBtn = document.createElement('button');
+  askBtn.type = 'button';
+  askBtn.className = 'exh-bi-dashboard-ask-btn';
+  askBtn.textContent = '🗨️ このグラフについて聞く';
+  askBtn.addEventListener('click', () => {
+    openChatWithBiQuestion('このグラフについて何か気づくことはある?', chatCardState);
+  });
+  actionsRow.appendChild(askBtn);
+
+  if (opts.pinnedCardId) {
+    const unpinBtn = document.createElement('button');
+    unpinBtn.type = 'button';
+    unpinBtn.className = 'exh-bi-dashboard-unpin-btn';
+    unpinBtn.textContent = '📌 ピン解除';
+    unpinBtn.addEventListener('click', () => {
+      unpinBtn.disabled = true;
+      void unpinCard(opts.pinnedCardId!)
+        .then(() => cardEl.remove())
+        .catch((err) => {
+          unpinBtn.disabled = false;
+          renderVizError(cardEl, 'ピン解除に失敗しました: ' + formatApiError(err));
+        });
+    });
+    actionsRow.appendChild(unpinBtn);
+  }
+}
+
 /** 1枚のカード(固定6枚・ピン留めどちらも同じ形)を集計して描画する。デフォルトカードと
  * ピン留めカードで集計・描画ロジックが分岐しないよう、この1関数だけを両方から呼ぶ。 */
 function renderCard(
@@ -237,6 +275,38 @@ function renderCard(
   const titleEl = document.createElement('div');
   titleEl.className = 'exh-bi-dashboard-card-title';
   cardEl.appendChild(titleEl);
+
+  // コンボ(棒+折れ線)は指標を2回集計する専用の組み立てが必要なため、他の見た目とは
+  // 別経路で処理する(chart-builder.ts側のプレビュー生成と同じ理由——buildBiResultの
+  // 単一呼び出しでは2指標を1つのグラフにまとめられない)。
+  const visual = card.params.visual ? resolveVisual(card.template, card.params.visual) : undefined;
+  if (visual && isComboVisual(visual)) {
+    const comboOutcome = buildComboOutcome(datasets, card.params, today);
+    if (!comboOutcome.ok) {
+      titleEl.textContent = card.title || '';
+      renderVizError(cardEl, comboOutcome.message);
+      return;
+    }
+    titleEl.textContent = card.title || comboOutcome.result.title;
+
+    const chartHost = document.createElement('div');
+    cardEl.appendChild(chartHost);
+    renderCombo(chartHost, comboOutcome.result);
+
+    renderCardActions(
+      cardEl,
+      {
+        template: card.template,
+        params: card.params,
+        title: comboOutcome.result.title,
+        interpretation: comboOutcome.result.interpretation,
+        filtersApplied: comboOutcome.result.filtersApplied,
+        data: comboOutcome.result.primaryData,
+      },
+      opts,
+    );
+    return;
+  }
 
   // このカードだけ集計に失敗しても、他のカードは問題なく表示を続ける
   // (既存space-dashboard.tsの「セクション単位で劣化」方針を踏襲)。
@@ -259,41 +329,13 @@ function renderCard(
   // その見た目のまま再描画する。それ以外(固定6枚・見た目未指定の既存ピン留めカード)は
   // 今まで通りrenderBiChartの自動選択(T2はカテゴリ数でドーナツ/横棒を自動判定等)に任せる
   // ——見た目を選ぶ機能を追加したことで既存の表示が変わらないようにするため。
-  if (card.params.visual) {
-    renderVisual(chartHost, resolveVisual(card.template, card.params.visual), outcome.biResult as unknown as BuiltBiResult);
+  if (visual) {
+    renderVisual(chartHost, visual, outcome.biResult as unknown as BuiltBiResult);
   } else {
     renderBiChart(chartHost, outcome.biResult as unknown as BiResult);
   }
 
-  const actionsRow = document.createElement('div');
-  actionsRow.className = 'exh-bi-dashboard-card-actions';
-  cardEl.appendChild(actionsRow);
-
-  const askBtn = document.createElement('button');
-  askBtn.type = 'button';
-  askBtn.className = 'exh-bi-dashboard-ask-btn';
-  askBtn.textContent = '🗨️ このグラフについて聞く';
-  askBtn.addEventListener('click', () => {
-    openChatWithBiQuestion('このグラフについて何か気づくことはある?', toChatCardState(card, outcome.biResult));
-  });
-  actionsRow.appendChild(askBtn);
-
-  if (opts.pinnedCardId) {
-    const unpinBtn = document.createElement('button');
-    unpinBtn.type = 'button';
-    unpinBtn.className = 'exh-bi-dashboard-unpin-btn';
-    unpinBtn.textContent = '📌 ピン解除';
-    unpinBtn.addEventListener('click', () => {
-      unpinBtn.disabled = true;
-      void unpinCard(opts.pinnedCardId!)
-        .then(() => cardEl.remove())
-        .catch((err) => {
-          unpinBtn.disabled = false;
-          renderVizError(cardEl, 'ピン解除に失敗しました: ' + formatApiError(err));
-        });
-    });
-    actionsRow.appendChild(unpinBtn);
-  }
+  renderCardActions(cardEl, toChatCardState(card, outcome.biResult), opts);
 }
 
 /**

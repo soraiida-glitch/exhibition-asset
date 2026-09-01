@@ -41,6 +41,14 @@ export interface TemplateParams {
    * 同時に指定しない想定(chart-builder.tsが排他的に選ばせる)——現時点ではチャット/
    * チップからは設定されず、グラフビルダー経由でのみ使われる。 */
   timeGranularity?: 'month';
+  /** T2のみ有効。指定すると集計(合計・平均等)をせず、dimensionのカテゴリごとにレコード
+   * 1件=1点として並べる(散布図)。dimensionと組み合わせて使う(timeGranularityとは排他)。 */
+  scatter?: boolean;
+  /** T2のみ有効。棒グラフ+折れ線グラフの組み合わせ(コンボチャート)を作るとき、1本目の
+   * metricを棒、このcomboMetricを折れ線として同じ軸(dimension)上に重ねて表示する。
+   * 集計はmetric・comboMetricそれぞれについて独立にbuildBiResultを2回呼ぶだけで、
+   * buildBiResult自体はcomboMetricを解釈しない(chart-builder.ts側の組み立て方の話)。 */
+  comboMetric?: MetricCode;
   /** グラフビルダー(src/customize/chart-builder.ts)で選んだ「見た目」(BuilderVisual)。
    * 同じT2/T5の集計結果でも複数の描画方法があり得るため(横棒/縦棒/ドーナツ、
    * ヒートマップ/集合棒/積み上げ棒等)、ピン留め後もユーザーが選んだ見た目のまま
@@ -86,7 +94,7 @@ export type ParamPatch = Partial<TemplateParams>;
 // 要件定義書 §6 の歯止めそのもの。period はどのテンプレでも横断的に許可する(既定=今期)。
 const ALLOWED_PARAM_KEYS: Record<TemplateId, ReadonlyArray<keyof TemplateParams>> = {
   T1: ['metric', 'period', 'entity', 'filters'],
-  T2: ['metric', 'dimension', 'filters', 'topN', 'sort', 'period', 'timeGranularity', 'visual'],
+  T2: ['metric', 'dimension', 'filters', 'topN', 'sort', 'period', 'timeGranularity', 'scatter', 'comboMetric', 'visual'],
   T4: ['metric', 'filters', 'period'],
   T5: ['metric', 'dimension', 'dimensionB', 'filters', 'period', 'visual'],
   T8: ['filters', 'topN', 'sort', 'period', 'entity'],
