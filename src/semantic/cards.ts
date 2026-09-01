@@ -36,6 +36,18 @@ export interface TemplateParams {
    * 持たないため、リード側を対象にしたい場合(例:「対応待ちリード件数」)はここで明示する。
    * 省略時は案件が対象。 */
   entity?: 'opportunity' | 'lead';
+  /** T2のみ有効。指定するとdimensionによるカテゴリ別集計ではなく、close_dateを月単位で
+   * バケット化した「月別推移」になる(aggregate.tsのaggregateByMonth)。dimensionと
+   * 同時に指定しない想定(chart-builder.tsが排他的に選ばせる)——現時点ではチャット/
+   * チップからは設定されず、グラフビルダー経由でのみ使われる。 */
+  timeGranularity?: 'month';
+  /** グラフビルダー(src/customize/chart-builder.ts)で選んだ「見た目」(BuilderVisual)。
+   * 同じT2/T5の集計結果でも複数の描画方法があり得るため(横棒/縦棒/ドーナツ、
+   * ヒートマップ/集合棒/積み上げ棒等)、ピン留め後もユーザーが選んだ見た目のまま
+   * 再描画できるよう保存しておく。cards.ts自体はフロントエンドの描画コンポーネントに
+   * 依存しない(自己完結ファイル)ため、型は緩い string のままにしている——実際の値の
+   * 妥当性はchart-builder.ts側が保証する。 */
+  visual?: string;
 }
 
 /** カード = ピン留めしたテンプレインスタンス。 */
@@ -74,9 +86,9 @@ export type ParamPatch = Partial<TemplateParams>;
 // 要件定義書 §6 の歯止めそのもの。period はどのテンプレでも横断的に許可する(既定=今期)。
 const ALLOWED_PARAM_KEYS: Record<TemplateId, ReadonlyArray<keyof TemplateParams>> = {
   T1: ['metric', 'period', 'entity', 'filters'],
-  T2: ['metric', 'dimension', 'filters', 'topN', 'sort', 'period'],
+  T2: ['metric', 'dimension', 'filters', 'topN', 'sort', 'period', 'timeGranularity', 'visual'],
   T4: ['metric', 'filters', 'period'],
-  T5: ['metric', 'dimension', 'dimensionB', 'filters', 'period'],
+  T5: ['metric', 'dimension', 'dimensionB', 'filters', 'period', 'visual'],
   T8: ['filters', 'topN', 'sort', 'period', 'entity'],
 };
 

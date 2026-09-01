@@ -8,28 +8,78 @@
  * プルダウンにしているのも、選べる範囲を構造的に「存在する組み合わせ」だけへ絞るため。
  *
  * 集計はチャット・ダッシュボードの固定カードと全く同じ buildBiResult() を通す(§6-3:
- * 集計ロジックを経路によって分岐/重複させない)。作成したグラフは「📌 ダッシュボードに
+ * 集計ロジックを経路によって分岐/重複させない)。ビジュアルタイプ(棒グラフの向き・
+ * 集合/積み上げ、ヒートマップ等)は表示層だけの選択であり、集計そのものは変えない
+ * ——同じT2/T5のデータを見せ方だけ変える(集合/積み上げ横棒・縦棒はT5の同じmatrixを、
+ * 横棒/縦棒/ドーナツはT2の同じseriesを描き分けるだけ)。作成したグラフは「📌 ダッシュボードに
  * ピン留め」から永続化でき、その後は他の固定カードと完全に同じ扱いになる。
  */
-import type { KintoneRecordFields } from '../semantic/aggregate';
+import type { BuiltBiResult, KintoneRecordFields } from '../semantic/aggregate';
 import { buildBiResult } from '../semantic/aggregate';
 import { allowedParamKeys } from '../semantic/cards';
 import type { ChatCardState, SortSpec, TemplateParams } from '../semantic/cards';
 import { DIMENSIONS, type DimensionCode, type DimensionDef } from '../semantic/dimensions';
 import { METRICS, type MetricCode, type MetricDef } from '../semantic/metrics';
 import { resolvePeriodPreset, type PeriodPreset } from '../semantic/fiscal';
-import type { BiResult, TemplateId } from '../semantic/templates';
-import { renderBiChart } from './bi-chat';
+import type { PayloadFor, TemplateId } from '../semantic/templates';
+import { renderBarH } from './charts/barH';
+import { renderBarV } from './charts/barV';
+import { renderCrossTabBar } from './charts/crossTabBar';
+import { renderDonut } from './charts/donut';
+import { renderFunnel } from './charts/funnel';
+import { renderHeatmap } from './charts/heatmap';
+import { renderKpiCard } from './charts/kpiCard';
+import { renderLineChart } from './charts/lineChart';
+import { renderRecordList } from './charts/recordList';
 import { THEME } from './theme';
 import { renderVizError } from './viz';
 
-const TEMPLATE_VISUAL_LABELS: Record<TemplateId, string> = {
-  T1: '数値カード',
-  T2: 'カテゴリ別グラフ',
-  T4: 'パイプライン(ファネル)',
-  T5: 'クロス集計ヒートマップ',
-  T8: '案件一覧',
-};
+/**
+ * ユーザーが選ぶ「見た目」の一覧。テンプレ(T1/T2/T4/T5/T8)よりも1段細かい粒度——
+ * 例えばT2は横棒/縦棒/ドーナツ/月別推移(折れ線)の4通りの見た目を持てる。
+ * 集計方法(template・timeGranularity)は各見た目ごとに固定で、ユーザーが個別に選ぶのは
+ * 軸・指標・期間などのパラメータだけ(§6ガードレール — 見た目の種類を増やしても
+ * 「何を集計するか」の自由度は増やさない)。
+ */
+export type BuilderVisual =
+  | 'kpi'
+  | 'bar_h'
+  | 'bar_v'
+  | 'donut'
+  | 'trend_line'
+  | 'funnel'
+  | 'crosstab_heatmap'
+  | 'crosstab_grouped_h'
+  | 'crosstab_grouped_v'
+  | 'crosstab_stacked_h'
+  | 'crosstab_stacked_v'
+  | 'record_list';
+
+interface VisualDef {
+  code: BuilderVisual;
+  label: string;
+  template: TemplateId;
+  timeGranularity?: 'month';
+}
+
+const VISUALS: VisualDef[] = [
+  { code: 'kpi', label: '数値カード', template: 'T1' },
+  { code: 'bar_h', label: 'カテゴリ別・横棒グラフ', template: 'T2' },
+  { code: 'bar_v', label: 'カテゴリ別・縦棒グラフ', template: 'T2' },
+  { code: 'donut', label: 'カテゴリ別・円グラフ(ドーナツ)', template: 'T2' },
+  { code: 'trend_line', label: '月別推移(折れ線)', template: 'T2', timeGranularity: 'month' },
+  { code: 'funnel', label: 'パイプライン(ファネル)', template: 'T4' },
+  { code: 'crosstab_heatmap', label: 'クロス集計・ヒートマップ', template: 'T5' },
+  { code: 'crosstab_grouped_h', label: 'クロス集計・集合横棒', template: 'T5' },
+  { code: 'crosstab_grouped_v', label: 'クロス集計・集合縦棒', template: 'T5' },
+  { code: 'crosstab_stacked_h', label: 'クロス集計・積み上げ横棒', template: 'T5' },
+  { code: 'crosstab_stacked_v', label: 'クロス集計・積み上げ縦棒', template: 'T5' },
+  { code: 'record_list', label: '案件一覧', template: 'T8' },
+];
+
+function visualDefOf(code: BuilderVisual): VisualDef {
+  return VISUALS.find((v) => v.code === code) || VISUALS[0];
+}
 
 const PERIOD_OPTIONS: { value: PeriodPreset; label: string }[] = [
   { value: 'current_fiscal_year', label: '今期' },
@@ -67,6 +117,18 @@ export function builderFieldsFor(template: TemplateId): BuilderFieldVisibility {
   };
 }
 
+/** 選んだ「見た目」に対する入力欄の表示可否。月別推移(trend_line)はT2だが、切り口
+ * (dimension)は使わない(日付を月単位でバケット化するだけで、カテゴリの切り口を選ばない)
+ * ——builderFieldsForの結果をそのまま使わず、ここで上書きする。 */
+export function fieldsForVisual(visual: BuilderVisual): BuilderFieldVisibility {
+  const def = visualDefOf(visual);
+  const fields = builderFieldsFor(def.template);
+  if (def.timeGranularity) {
+    return { ...fields, dimension: false, entity: false, sort: false };
+  }
+  return fields;
+}
+
 /** 選べる次元の候補(指定したtargetAppのものだけに絞る——案件側とリード側を混在させない)。 */
 export function dimensionOptionsFor(targetApp?: 'opportunity' | 'lead'): DimensionDef[] {
   return (Object.values(DIMENSIONS) as DimensionDef[]).filter((d) => !targetApp || d.targetApp === targetApp);
@@ -96,8 +158,11 @@ function injectChartBuilderStyles(): void {
 .exh-chart-builder-build-btn:hover { background: ${THEME.soraDeep}; }
 .exh-chart-builder-preview { margin-top: 14px; border-top: 1px solid ${THEME.mistLine}; padding-top: 12px; }
 .exh-chart-builder-preview-title { font-size: 12.5px; font-weight: 800; color: ${THEME.ink}; margin-bottom: 6px; }
-.exh-chart-builder .exh-bi-chart-host { height: 220px; }
-.exh-chart-builder .exh-bi-chart-host.exh-bi-chart-tall { height: 300px; }
+/* renderVisual()はbi-chat.tsと同じクラス名(exh-bi-chart-host/exh-bi-chart-tall)を使うため、
+   プレビュー用のサイズはここで上書きする(ダッシュボードの固定カードより少し広めに取る
+   ——ビルダーは常に全幅なので、他のカードより余裕がある)。 */
+.exh-chart-builder .exh-bi-chart-host { width: 100%; height: 260px; }
+.exh-chart-builder .exh-bi-chart-host.exh-bi-chart-tall { height: 340px; }
 .exh-chart-builder-pin-btn { margin-top: 8px; border: 1px solid ${THEME.mistLine}; background: ${THEME.cloud};
   color: ${THEME.soraDeep}; font-size: 11.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
 .exh-chart-builder-pin-btn:hover { background: ${THEME.mist}; }
@@ -129,6 +194,96 @@ function setOptions(select: HTMLSelectElement, options: { value: string; label: 
   if (options.some((o) => o.value === prev)) select.value = prev;
 }
 
+/**
+ * 選ばれた見た目に応じて、対応するチャートコンポーネントで描画する。集計(buildBiResult)は
+ * どの見た目でも共通——ここで分岐するのは「同じデータをどう見せるか」だけ。
+ * dashboard.ts(ピン留めカードの再描画)とこのファイル自身(プレビュー)の両方から呼ばれる
+ * ため、サイズ調整用のクラス名は引数で受け取る——既定値は bi-chat.ts の renderBiChart() と
+ * 同じクラス名(exh-bi-chart-host/exh-bi-chart-tall)にして、ダッシュボードの既存CSS
+ * (#exh-bi-dashboard .exh-bi-chart-host 等のサイズ上書き)がそのまま効くようにしている。
+ */
+export function renderVisual(
+  container: HTMLElement,
+  visual: BuilderVisual,
+  biResult: BuiltBiResult,
+  hostClassName = 'exh-bi-chart-host',
+  tallClassName = 'exh-bi-chart-tall',
+): () => void {
+  const chartHost = document.createElement('div');
+  chartHost.className = hostClassName;
+  container.appendChild(chartHost);
+
+  switch (visual) {
+    case 'kpi':
+      chartHost.classList.remove(hostClassName);
+      chartHost.style.height = 'auto';
+      renderKpiCard(chartHost, biResult.data as PayloadFor<'T1'>);
+      return () => undefined;
+    case 'bar_h':
+      return renderBarH(chartHost, biResult.data as PayloadFor<'T2'>);
+    case 'bar_v':
+      return renderBarV(chartHost, biResult.data as PayloadFor<'T2'>);
+    case 'donut':
+      return renderDonut(chartHost, biResult.data as PayloadFor<'T2'>);
+    case 'trend_line':
+      return renderLineChart(chartHost, biResult.data as PayloadFor<'T2'>);
+    case 'funnel':
+      return renderFunnel(chartHost, biResult.data as PayloadFor<'T4'>);
+    case 'crosstab_heatmap':
+      chartHost.classList.add(tallClassName);
+      return renderHeatmap(chartHost, biResult.data as PayloadFor<'T5'>);
+    case 'crosstab_grouped_h':
+      chartHost.classList.add(tallClassName);
+      return renderCrossTabBar(chartHost, biResult.data as PayloadFor<'T5'>, { stacked: false, horizontal: true });
+    case 'crosstab_grouped_v':
+      chartHost.classList.add(tallClassName);
+      return renderCrossTabBar(chartHost, biResult.data as PayloadFor<'T5'>, { stacked: false, horizontal: false });
+    case 'crosstab_stacked_h':
+      chartHost.classList.add(tallClassName);
+      return renderCrossTabBar(chartHost, biResult.data as PayloadFor<'T5'>, { stacked: true, horizontal: true });
+    case 'crosstab_stacked_v':
+      chartHost.classList.add(tallClassName);
+      return renderCrossTabBar(chartHost, biResult.data as PayloadFor<'T5'>, { stacked: true, horizontal: false });
+    case 'record_list':
+      chartHost.classList.remove(hostClassName);
+      chartHost.style.height = 'auto';
+      renderRecordList(chartHost, biResult.data as PayloadFor<'T8'>);
+      return () => undefined;
+    default:
+      return () => undefined;
+  }
+}
+
+/** template(T1/T2/T4/T5/T8)から既定の見た目を1つ選ぶ——固定6枚のようにvisualを持たない
+ * カード(ユーザーが明示的に見た目を選んでいない場合)のフォールバック用。既存の自動選択
+ * (bi-chat.tsのrenderBiChart)とは違い、ここではドーナツを既定にせず横棒を既定にする——
+ * chart-builder.ts経由で明示的にvisualを選んだカードとの一貫性より、fallback自体の単純さを
+ * 優先している(固定6枚は今まで通りrenderBiChartの自動選択を使い続けるため、実際にはこの
+ * フォールバックが使われるのは「visualの無い古いピン留めカード」のような限定的なケースのみ)。 */
+function defaultVisualFor(template: TemplateId): BuilderVisual {
+  switch (template) {
+    case 'T1':
+      return 'kpi';
+    case 'T2':
+      return 'bar_h';
+    case 'T4':
+      return 'funnel';
+    case 'T5':
+      return 'crosstab_heatmap';
+    case 'T8':
+      return 'record_list';
+    default:
+      return 'kpi';
+  }
+}
+
+/** カードのparams.visualを妥当な BuilderVisual として解決する(不正・未設定ならテンプレの
+ * 既定値にフォールバックする)。dashboard.tsがピン留めカードを再描画する際に使う。 */
+export function resolveVisual(template: TemplateId, visual: string | undefined): BuilderVisual {
+  if (visual && VISUALS.some((v) => v.code === visual && v.template === template)) return visual as BuilderVisual;
+  return defaultVisualFor(template);
+}
+
 export interface ChartBuilderCallbacks {
   /** 「📌 ダッシュボードにピン留め」押下時に呼ばれる。成功したら呼び出し側でダッシュボードを再描画する。 */
   onPin: (card: ChatCardState) => Promise<void>;
@@ -158,12 +313,9 @@ export function renderChartBuilder(
   fieldsRow.className = 'exh-chart-builder-fields';
   container.appendChild(fieldsRow);
 
-  const templateField = makeField('種類');
-  setOptions(
-    templateField.select,
-    (Object.keys(TEMPLATE_VISUAL_LABELS) as TemplateId[]).map((t) => ({ value: t, label: TEMPLATE_VISUAL_LABELS[t] })),
-  );
-  fieldsRow.appendChild(templateField.wrap);
+  const visualField = makeField('種類');
+  setOptions(visualField.select, VISUALS.map((v) => ({ value: v.code, label: v.label })));
+  fieldsRow.appendChild(visualField.wrap);
 
   const entityField = makeField('対象');
   setOptions(entityField.select, [
@@ -207,12 +359,13 @@ export function renderChartBuilder(
   previewWrap.className = 'exh-chart-builder-preview';
   previewWrap.style.display = 'none';
   container.appendChild(previewWrap);
+  let disposePreview: (() => void) | undefined;
 
-  // 選んだテンプレ/次元に応じて、表示する欄・選べる候補を更新する
+  // 選んだ見た目/次元に応じて、表示する欄・選べる候補を更新する
   // (存在しない組み合わせのフィールドはそもそも出さない——ガードレール)。
   function syncFieldVisibility(): void {
-    const template = templateField.select.value as TemplateId;
-    const fields = builderFieldsFor(template);
+    const visual = visualField.select.value as BuilderVisual;
+    const fields = fieldsForVisual(visual);
     entityField.wrap.style.display = fields.entity ? '' : 'none';
     dimensionField.wrap.style.display = fields.dimension ? '' : 'none';
     dimensionBField.wrap.style.display = fields.dimensionB ? '' : 'none';
@@ -242,15 +395,15 @@ export function renderChartBuilder(
   }
 
   // 指標は、選ばれている切り口がリード側ならcountだけに絞る(runAggregateの制約と同じ)。
+  // 月別推移(次元を使わない)はcloseDateが案件にしか無いため常に全指標を候補にする。
   function syncMetricOptions(): void {
     if (metricField.wrap.style.display === 'none') return;
-    const template = templateField.select.value as TemplateId;
-    const fields = builderFieldsFor(template);
+    const fields = fieldsForVisual(visualField.select.value as BuilderVisual);
     const dim = fields.dimension ? (dimensionField.select.value as DimensionCode | '') : undefined;
     setOptions(metricField.select, metricOptionsFor(dim || undefined).map((m) => ({ value: m.code, label: m.label })));
   }
 
-  templateField.select.addEventListener('change', syncFieldVisibility);
+  visualField.select.addEventListener('change', syncFieldVisibility);
   dimensionField.select.addEventListener('change', () => {
     syncDimensionBOptions();
     syncMetricOptions();
@@ -259,22 +412,28 @@ export function renderChartBuilder(
   syncFieldVisibility();
 
   buildBtn.addEventListener('click', () => {
-    const template = templateField.select.value as TemplateId;
-    const fields = builderFieldsFor(template);
+    const visual = visualField.select.value as BuilderVisual;
+    const visualDef = visualDefOf(visual);
+    const fields = fieldsForVisual(visual);
     const params: TemplateParams = {
       period: { preset: periodField.select.value as PeriodPreset },
     };
+    if (visualDef.timeGranularity) params.timeGranularity = visualDef.timeGranularity;
     if (fields.entity) params.entity = entityField.select.value as 'opportunity' | 'lead';
     if (fields.dimension) params.dimension = dimensionField.select.value as DimensionCode;
     if (fields.dimensionB) params.dimensionB = dimensionBField.select.value as DimensionCode;
     if (fields.metric) params.metric = metricField.select.value as MetricCode;
     if (fields.topN && topNInput.value) params.topN = Number(topNInput.value);
     if (fields.sort) params.sort = sortField.select.value as SortSpec;
+    // 見た目(横棒/縦棒/ヒートマップ/集合棒/積み上げ棒等)もパラメータの一部として保存する
+    // ——ピン留め後にダッシュボードを開き直しても、選んだ見た目のまま再描画するため
+    // (dashboard.tsのrenderCard()がparams.visualを見てrenderVisual()を呼ぶ)。
+    params.visual = visual;
 
     const outcome = buildBiResult(
       datasets,
       {
-        template,
+        template: visualDef.template,
         metric: params.metric as MetricCode,
         dimension: params.dimension,
         dimensionB: params.dimensionB,
@@ -283,11 +442,13 @@ export function renderChartBuilder(
         entity: params.entity,
         topN: params.topN,
         sort: params.sort,
+        timeGranularity: params.timeGranularity,
       },
       today,
       resolvePeriodPreset,
     );
 
+    disposePreview?.();
     previewWrap.style.display = '';
     previewWrap.innerHTML = '';
 
@@ -301,12 +462,10 @@ export function renderChartBuilder(
     previewTitleEl.textContent = outcome.biResult.title;
     previewWrap.appendChild(previewTitleEl);
 
-    const chartHost = document.createElement('div');
-    previewWrap.appendChild(chartHost);
-    renderBiChart(chartHost, outcome.biResult as unknown as BiResult);
+    disposePreview = renderVisual(previewWrap, visual, outcome.biResult);
 
     const cardState: ChatCardState = {
-      template,
+      template: visualDef.template,
       params,
       title: outcome.biResult.title,
       interpretation: outcome.biResult.interpretation,

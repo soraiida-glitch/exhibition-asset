@@ -200,6 +200,53 @@ export function aggregateByDimension(
   return seeded ? entries : entries.sort((a, b) => b.value - a.value);
 }
 
+/** 絶対日付レンジ("YYYY-MM-DD"〜"YYYY-MM-DD")に含まれる月バケットのラベルを時系列順に
+ * 生成する("YYYY-MM"形式)。36ヶ月(3年)で打ち切る——period:allのような超長期間の
+ * レンジでもバケット数が暴走しない安全弁(月別推移は元々「直近の傾向を見る」用途のため、
+ * それ以上の粒度は現実的に意味を持たない)。 */
+export function monthBucketsInRange(startDate: string, endDate: string): string[] {
+  const buckets: string[] = [];
+  const [startY, startM] = startDate.split('-').map(Number);
+  const [endY, endM] = endDate.split('-').map(Number);
+  let y = startY;
+  let m = startM;
+  let guard = 0;
+  while ((y < endY || (y === endY && m <= endM)) && guard < 36) {
+    buckets.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    guard += 1;
+  }
+  return buckets;
+}
+
+/**
+ * T2と同じ形(DimensionSeriesPoint[])だが、カテゴリの等値比較ではなく日付フィールドを
+ * "YYYY-MM"単位でバケット化する「月別推移」向けの集計。DIMENSIONS(semantic/dimensions.ts)
+ * には日付フィールドをそのまま登録できない(等値比較を前提にしたDimensionDefの形と、
+ * 日付のパース・バケット化は性質が異なるため)——このため aggregateByDimension とは
+ * 別関数として独立させている。
+ */
+export function aggregateByMonth(
+  records: KintoneRecordFields[],
+  metric: string,
+  dateField: string,
+  monthBuckets: readonly string[],
+): DimensionSeriesPoint[] {
+  const buckets = new Map<string, KintoneRecordFields[]>();
+  for (const key of monthBuckets) buckets.set(key, []);
+  for (const r of records) {
+    const raw = fieldStr(r, dateField);
+    if (!raw) continue; // close_date空のレコードは除外(§3、他の集計と同じ扱い)
+    const month = raw.slice(0, 7);
+    if (buckets.has(month)) buckets.get(month)!.push(r);
+  }
+  return monthBuckets.map((key) => ({ key, value: computeMetric(buckets.get(key) || [], metric) }));
+}
+
 export interface FunnelStepPoint {
   stage: string;
   value: number;
@@ -446,6 +493,10 @@ export interface BiPlanLike {
   /** T2のみ有効。既定(未指定)はaggregateByDimensionの並び(値の降順、stage等の
    * seeded次元だけは意味レイヤーの定義順)をそのまま使う。 */
   sort?: SortSpec;
+  /** T2のみ有効。指定するとdimensionによるカテゴリ別集計ではなく、close_dateを月単位で
+   * バケット化した「月別推移」集計(aggregateByMonth)になる——dimensionとtimeGranularity
+   * は同時に指定しない想定(呼び出し側=chart-builder.tsが排他的に選ばせる)。 */
+  timeGranularity?: 'month';
 }
 
 /** T2のseries(またはT8の抽出結果)へ sort/topN を適用する。runAggregateの結果そのものは
@@ -477,12 +528,69 @@ export type BuildBiResultOutcome = { ok: true; biResult: BuiltBiResult; factShee
  * interpretation/factSheet の決定的な文字列組み立てまでを1関数にまとめ、経路によって集計
  * ロジックや表示フォーマットが分岐・重複しないことを構造的に保証する(§6-3)。
  */
+/**
+ * 「月別推移」(T2 + timeGranularity: 'month')専用の組み立て。通常のT2(カテゴリ別集計)と
+ * 最終的な PayloadFor<'T2'> の形は完全に同じ(series: {key, value}[])にすることで、
+ * チャート側(barV/line等)・factSheet・pinned_cardsでの再計算のいずれも通常のT2と
+ * 区別なく扱える——違うのはseriesの中身の作り方(日付バケット化)だけ。
+ * リード側は close_date に相当する日付フィールドが無いため、時系列は案件のみ対応する。
+ */
+function buildMonthlyTrendResult(
+  input: RunAggregateInput,
+  plan: BiPlanLike,
+  today: Date,
+  resolvePeriod: (preset: PeriodPreset, today: Date) => FiscalYearRange | null,
+): BuildBiResultOutcome {
+  const metric = plan.metric as MetricCode | undefined;
+  if (!metric || METRIC_LABELS[metric] === undefined) {
+    return { ok: false, message: 'どの指標について知りたいか教えていただけますか?' };
+  }
+
+  // period:all(絶対レンジが無い)場合は今期にフォールバックする——月別推移は「直近の傾向」を
+  // 見る用途のため、無期限のバケット生成はしない(monthBucketsInRangeの36ヶ月上限と同じ考え方)。
+  const range = resolvePeriod(plan.period || 'current_fiscal_year', today) || resolvePeriod('current_fiscal_year', today)!;
+  const monthBuckets = monthBucketsInRange(range.start, range.end);
+
+  const filters = plan.filters || [];
+  const baseRecords = applyFilters(input.opportunityRecords, filters);
+  const rawSeries = aggregateByMonth(baseRecords, metric, 'close_date', monthBuckets);
+  // win_rateの0〜1→0〜100スケール変換は通常のT2経路と同じ(buildBiResult本体のscaleForDisplay
+  // と重複するが、月別推移はrunAggregateを経由しないためここで独立して行う)。
+  const series = rawSeries.map((s) => ({ key: s.key, value: metric === 'win_rate' ? s.value * 100 : s.value }));
+  // 時系列は常に時系列順を保つ(sortを適用しない)——topNだけ、指定があれば先頭からの
+  // 月数を絞り込む用途として適用する。
+  const trimmedSeries = typeof plan.topN === 'number' && plan.topN > 0 ? series.slice(0, plan.topN) : series;
+
+  const metricLabel = METRIC_LABELS[metric] || metric;
+  const title = `${metricLabel}(月別推移)`;
+  const filtersApplied: { label: string; value: string }[] = [{ label: '期間', value: `${range.start}〜${range.end}` }];
+  for (const f of filters) {
+    filtersApplied.push({ label: DIMENSION_LABELS[f.field] || f.field, value: Array.isArray(f.value) ? f.value.join('・') : String(f.value) });
+  }
+  const interpretation = `${range.start}〜${range.end}の${metricLabel}を月別に集計しました。`;
+  const data = {
+    metric: { code: metric, label: metricLabel, unit: METRIC_UNITS[metric] || '' },
+    dimension: { code: 'month', label: '月' },
+    series: trimmedSeries,
+  };
+  const factSheet = buildFactSheet('T2', metric, title, data);
+  const biResult: BuiltBiResult = { template: 'T2', title, interpretation, filtersApplied, data, narrative: '' };
+  return { ok: true, biResult, factSheet };
+}
+
 export function buildBiResult(
   input: RunAggregateInput,
   plan: BiPlanLike,
   today: Date,
   resolvePeriod: (preset: PeriodPreset, today: Date) => FiscalYearRange | null,
 ): BuildBiResultOutcome {
+  // 月別推移(timeGranularity: 'month')は、カテゴリの等値比較(dimension)ではなく
+  // close_dateの月バケット化(aggregateByMonth)を使う——通常のrunAggregate経路とは
+  // 集計方法そのものが異なるため、ここで別関数に分ける。
+  if (plan.template === 'T2' && plan.timeGranularity === 'month') {
+    return buildMonthlyTrendResult(input, plan, today, resolvePeriod);
+  }
+
   const period = plan.period || 'current_fiscal_year';
   const range = resolvePeriod(period, today);
   const periodFilter: FilterSpec | null = range ? { field: 'close_date', op: 'range', value: range } : null;
@@ -594,6 +702,8 @@ export function aggregateEmbeddable(): string {
     applyFilters,
     computeMetric,
     aggregateByDimension,
+    monthBucketsInRange,
+    aggregateByMonth,
     aggregateFunnel,
     aggregateCrossTab,
     buildInterpretation,
@@ -601,6 +711,7 @@ export function aggregateEmbeddable(): string {
     formatMetricValueForFactSheet,
     buildFactSheet,
     applySortAndTopN,
+    buildMonthlyTrendResult,
     buildBiResult,
   ].map((fn) => fn.toString());
   return [shim, ...consts, ...fns].join('\n');

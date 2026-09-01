@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { builderFieldsFor, dimensionOptionsFor, metricOptionsFor } from '../chart-builder';
+import { builderFieldsFor, dimensionOptionsFor, fieldsForVisual, metricOptionsFor, resolveVisual } from '../chart-builder';
 
 describe('builderFieldsFor (RELVA BI 追加要件定義書 §3・§6: グラフビルダーの表示欄はALLOWED_PARAM_KEYSと同じ表を参照する)', () => {
   it('T1 shows entity/metric but not dimension/dimensionB/topN/sort', () => {
@@ -46,6 +46,50 @@ describe('dimensionOptionsFor (never lets an opportunity-side and lead-side axis
   it('returns only lead-side dimensions when filtered', () => {
     const codes = dimensionOptionsFor('lead').map((d) => d.code);
     expect(codes).toEqual(['lead_source', 'lead_status']);
+  });
+});
+
+describe('fieldsForVisual (ユーザー要望で追加した「棒グラフの種類」「月別推移」対応)', () => {
+  it('bar_h/bar_v/donut (T2の見た目バリエーション) show the same fields as plain T2', () => {
+    expect(fieldsForVisual('bar_h')).toEqual(builderFieldsFor('T2'));
+    expect(fieldsForVisual('bar_v')).toEqual(builderFieldsFor('T2'));
+    expect(fieldsForVisual('donut')).toEqual(builderFieldsFor('T2'));
+  });
+
+  it('trend_line (月別推移) hides dimension/entity/sort — it buckets close_date by month, not by a category', () => {
+    const fields = fieldsForVisual('trend_line');
+    expect(fields.dimension).toBe(false);
+    expect(fields.entity).toBe(false);
+    expect(fields.sort).toBe(false);
+    expect(fields.metric).toBe(true); // 指標(Y軸)は必要
+  });
+
+  it('the 4 crosstab bar variants (grouped/stacked x horizontal/vertical) show the same fields as the heatmap (all T5)', () => {
+    const heatmapFields = fieldsForVisual('crosstab_heatmap');
+    expect(fieldsForVisual('crosstab_grouped_h')).toEqual(heatmapFields);
+    expect(fieldsForVisual('crosstab_grouped_v')).toEqual(heatmapFields);
+    expect(fieldsForVisual('crosstab_stacked_h')).toEqual(heatmapFields);
+    expect(fieldsForVisual('crosstab_stacked_v')).toEqual(heatmapFields);
+    expect(heatmapFields.dimension).toBe(true);
+    expect(heatmapFields.dimensionB).toBe(true);
+  });
+});
+
+describe('resolveVisual (ピン留めカードを開き直した時に選んだ見た目を復元する)', () => {
+  it('returns the stored visual when it is valid for the template', () => {
+    expect(resolveVisual('T2', 'bar_v')).toBe('bar_v');
+    expect(resolveVisual('T5', 'crosstab_stacked_h')).toBe('crosstab_stacked_h');
+  });
+
+  it('falls back to a sensible default when visual is missing (e.g. the 6 default cards, which never set it)', () => {
+    expect(resolveVisual('T1', undefined)).toBe('kpi');
+    expect(resolveVisual('T4', undefined)).toBe('funnel');
+    expect(resolveVisual('T8', undefined)).toBe('record_list');
+  });
+
+  it('falls back to a sensible default when visual belongs to a different template (defensive, should not normally happen)', () => {
+    expect(resolveVisual('T2', 'crosstab_heatmap')).not.toBe('crosstab_heatmap');
+    expect(resolveVisual('T5', 'bar_h')).not.toBe('bar_h');
   });
 });
 

@@ -25,7 +25,7 @@ import type { PeriodPreset } from '../semantic/fiscal';
 import type { BiResult, TemplateId } from '../semantic/templates';
 import { renderBiChart } from './bi-chat';
 import { formatApiError } from './chat';
-import { renderChartBuilder } from './chart-builder';
+import { renderChartBuilder, renderVisual, resolveVisual } from './chart-builder';
 import { formatMetricNumber } from './format-utils';
 import { getOrCreateSpaceWidgetRow } from './space-dashboard';
 import { THEME, injectFontStyles } from './theme';
@@ -204,6 +204,9 @@ function computeCardOutcome(
       filters: card.params.filters,
       period: periodPresetOf(card.params),
       entity: card.params.entity,
+      topN: card.params.topN,
+      sort: card.params.sort,
+      timeGranularity: card.params.timeGranularity,
     },
     today,
     resolvePeriodPreset,
@@ -248,11 +251,19 @@ function renderCard(
   titleEl.textContent = card.title || outcome.biResult.title;
 
   // Aggregate BI(n8n)側と同じ理由で data は緩い Record<string, unknown> 型——
-  // renderBiChart はテンプレごとの厳密な PayloadFor<T> を要求するため、ここでキャストする
-  // (実行時の形は runAggregate/buildBiResult が既に保証しているので安全)。
+  // renderBiChart/renderVisual はテンプレごとの厳密な PayloadFor<T> を要求するため、
+  // ここでキャストする(実行時の形は runAggregate/buildBiResult が既に保証しているので安全)。
   const chartHost = document.createElement('div');
   cardEl.appendChild(chartHost);
-  renderBiChart(chartHost, outcome.biResult as unknown as BiResult);
+  // グラフビルダー(chart-builder.ts)で明示的に見た目を選んでピン留めしたカードだけ、
+  // その見た目のまま再描画する。それ以外(固定6枚・見た目未指定の既存ピン留めカード)は
+  // 今まで通りrenderBiChartの自動選択(T2はカテゴリ数でドーナツ/横棒を自動判定等)に任せる
+  // ——見た目を選ぶ機能を追加したことで既存の表示が変わらないようにするため。
+  if (card.params.visual) {
+    renderVisual(chartHost, resolveVisual(card.template, card.params.visual), outcome.biResult as unknown as BuiltBiResult);
+  } else {
+    renderBiChart(chartHost, outcome.biResult as unknown as BiResult);
+  }
 
   const actionsRow = document.createElement('div');
   actionsRow.className = 'exh-bi-dashboard-card-actions';

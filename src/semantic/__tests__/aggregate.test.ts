@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   aggregateByDimension,
+  aggregateByMonth,
   aggregateCrossTab,
   aggregateEmbeddable,
   aggregateFunnel,
@@ -9,6 +10,7 @@ import {
   buildFactSheet,
   buildInterpretation,
   computeMetric,
+  monthBucketsInRange,
   runAggregate,
 } from '../aggregate';
 import type { KintoneRecordFields } from '../aggregate';
@@ -146,6 +148,93 @@ describe('aggregateFunnel', () => {
       { stage: '対応中', value: 1 },
       { stage: '変換済み', value: 1 },
     ]);
+  });
+});
+
+// RELVA BI 追加要件定義書(ユーザーからの追加要望) — 「月別推移」向けの時系列集計。
+// DIMENSIONS(等値比較のカテゴリ次元)とは違い、close_dateを日付としてパース・バケット化する
+// 必要があるため、aggregateByDimensionとは独立した関数として検証する。
+describe('monthBucketsInRange', () => {
+  it('generates chronological "YYYY-MM" buckets spanning a fiscal year', () => {
+    expect(monthBucketsInRange('2026-04-01', '2027-03-31')).toEqual([
+      '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09',
+      '2026-10', '2026-11', '2026-12', '2027-01', '2027-02', '2027-03',
+    ]);
+  });
+
+  it('handles a single-month range', () => {
+    expect(monthBucketsInRange('2026-08-01', '2026-08-31')).toEqual(['2026-08']);
+  });
+
+  it('caps at 36 months so an unbounded range cannot runaway', () => {
+    expect(monthBucketsInRange('2000-01-01', '2099-12-31')).toHaveLength(36);
+  });
+});
+
+describe('aggregateByMonth', () => {
+  const buckets = monthBucketsInRange('2026-04-01', '2026-06-30');
+
+  it('buckets records by the month of a date field and computes the metric per bucket', () => {
+    const series = aggregateByMonth(OPPORTUNITIES, 'amount_sum', 'close_date', buckets);
+    expect(series.map((s) => s.key)).toEqual(['2026-04', '2026-05', '2026-06']);
+    // 2026-04-15(失注, 500,000)・2026-05-10(成約, 1,000,000)・2026-06-20(成約, 2,000,000)
+    expect(series.find((s) => s.key === '2026-04')?.value).toBe(500_000);
+    expect(series.find((s) => s.key === '2026-05')?.value).toBe(1_000_000);
+    expect(series.find((s) => s.key === '2026-06')?.value).toBe(2_000_000);
+  });
+
+  it('excludes records with an empty date field (same rule as the period range filter)', () => {
+    const withEmpty = [...OPPORTUNITIES, opp({ stage: '初期接触', amount: 999_999, close_date: '' })];
+    const series = aggregateByMonth(withEmpty, 'amount_sum', 'close_date', buckets);
+    const total = series.reduce((sum, s) => sum + s.value, 0);
+    expect(total).toBe(3_500_000); // 500,000+1,000,000+2,000,000。999,999円(close_date空)は含まれない
+  });
+
+  it('ignores records whose month falls outside the given buckets', () => {
+    // OPPORTUNITIESには2025-12-01/2026-07-01/2026-08-01/2026-09-01のレコードもあるが、
+    // 2026-04のバケット1つだけに絞れば、その月の1件(失注)しかカウントされない。
+    const series = aggregateByMonth(OPPORTUNITIES, 'count', 'close_date', ['2026-04']);
+    expect(series).toEqual([{ key: '2026-04', value: 1 }]);
+  });
+});
+
+describe('buildBiResult: 月別推移(timeGranularity: "month")', () => {
+  const today = new Date(2026, 7, 30); // 2026-08-30 -> 今期 2026-04-01〜2027-03-31
+  const input = { opportunityRecords: OPPORTUNITIES, leadRecords: [] };
+
+  it('produces a T2-shaped series keyed by month instead of a category', () => {
+    const outcome = buildBiResult(
+      input,
+      { template: 'T2', metric: 'amount_sum', period: 'current_fiscal_year', timeGranularity: 'month' },
+      today,
+      resolvePeriodPreset,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.biResult.template).toBe('T2');
+    expect(outcome.biResult.title).toContain('月別推移');
+    const data = outcome.biResult.data as { dimension: { code: string }; series: { key: string; value: number }[] };
+    expect(data.dimension.code).toBe('month');
+    expect(data.series[0].key).toBe('2026-04'); // 今期の初月から始まる
+    expect(data.series).toHaveLength(12); // 今期は12ヶ月
+  });
+
+  it('falls back to the current fiscal year range when period is "all" (avoids an unbounded bucket list)', () => {
+    const outcome = buildBiResult(
+      input,
+      { template: 'T2', metric: 'count', period: 'all', timeGranularity: 'month' },
+      today,
+      resolvePeriodPreset,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const data = outcome.biResult.data as { series: unknown[] };
+    expect(data.series).toHaveLength(12);
+  });
+
+  it('requires a metric (unlike T8, a trend line has nothing to plot without one)', () => {
+    const outcome = buildBiResult(input, { template: 'T2', period: 'current_fiscal_year', timeGranularity: 'month' }, today, resolvePeriodPreset);
+    expect(outcome.ok).toBe(false);
   });
 });
 

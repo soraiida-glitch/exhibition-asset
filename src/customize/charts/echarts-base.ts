@@ -9,12 +9,13 @@
  * 本セッションで確立した「レインボー禁止」方針)をそのまま再利用する。
  */
 import * as echarts from 'echarts/core';
-import { BarChart, PieChart, FunnelChart, HeatmapChart } from 'echarts/charts';
+import { BarChart, PieChart, FunnelChart, HeatmapChart, LineChart } from 'echarts/charts';
 import type {
   BarSeriesOption,
   PieSeriesOption,
   FunnelSeriesOption,
   HeatmapSeriesOption,
+  LineSeriesOption,
 } from 'echarts/charts';
 import {
   GridComponent,
@@ -36,6 +37,7 @@ echarts.use([
   PieChart,
   FunnelChart,
   HeatmapChart,
+  LineChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -49,6 +51,7 @@ export type EChartsOption = echarts.ComposeOption<
   | PieSeriesOption
   | FunnelSeriesOption
   | HeatmapSeriesOption
+  | LineSeriesOption
   | GridComponentOption
   | TooltipComponentOption
   | LegendComponentOption
