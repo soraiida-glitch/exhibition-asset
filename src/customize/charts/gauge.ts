@@ -29,11 +29,15 @@ export function renderGauge(container: HTMLElement, payload: PayloadFor<'T1'>): 
         axisLine: { lineStyle: { width: 14, color: [[1, CHART_COLORS.grid]] } },
         pointer: { itemStyle: { color: CHART_COLORS.primaryDeep } },
         axisTick: { show: false },
+        // 既定のsplitNumber(10)だと目盛りラベルが11個になり、金額のような長い文字列
+        // (「¥xxx万」)では狭いゲージ上で隣同士が重なって読めなくなる
+        // (ユーザー報告のスクリーンショットで確認)——4分割・5ラベルまで減らす。
+        splitNumber: 4,
         splitLine: { length: 10, lineStyle: { color: CHART_COLORS.grid } },
         axisLabel: {
           color: CHART_COLORS.label,
           fontSize: 10,
-          distance: 16,
+          distance: 18,
           formatter: (v: number) => formatMetricNumber(v, payload.unit),
         },
         detail: {
