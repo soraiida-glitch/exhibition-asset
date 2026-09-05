@@ -1,10 +1,47 @@
+import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { buildAgentWorkflow } from '../agent-workflow';
+
+// テスト専用の使い捨てRSA鍵ペア(実在のGCPサービスアカウントとは無関係——Build Vertex JWT
+// ノードの署名ロジックを、実際に検証可能な形で単体テストするためだけに生成したもの)。
+const TEST_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDARW3bqYb0BFUF
+QtbFNFYM3AeSLMeC5UzJU9NHrVEGDW7Ctdb47tChIG/JUX+zqp3o/FnIiKL+J3P/
+/aWC+cV1Sb688LeMxj7s+avRGJqMrffwiYdVAHgLcJUCmO74ggWSHD3rqpXxJrl7
+U/Xp19E+H+7KXEwyK/EkhdUTVj97BbHePWOs5DY4DtZNH6gz8B2iwTW8TMKbJLe4
+R9gyYzwq+VHHO78VgTVtq2UP9lTfu4r+oXqZJR9p6ZRjdJKBs6bZ1MLhj41eGA7s
+cN3ld5EmiUCCwu3Gs/rgY2cFco+UpUXzu+Wf2R6k+4RzLBMTID8ofz3u0/hWltev
+LG631DORAgMBAAECggEABjGmZJttPsqt732z/AXf2Mm0z7t0EO4wn1K9PXOiptKD
+dS/U9U+CNpKcL0zaE5BlRmZswQZP0+ay+LXz4UiJGSpvQ9hwXU9coxc29wU3I12O
+XXgcvTsG4v11O3BwUF6l7ctNnlwwOOTRuFyf0TDz62+tamT3Sm16dv39u4H9iQm7
+X6FZx4asuE0OSsD1P1Hl7g0rQWxv9IbsQ9EhnnO+7IOBaLTMbYgFdfyqup5ql9Rp
+o79sqSk/gN1yuGviGjV0r8GKCaj2fSmDEtA8J02lep9KZTmx/r8XV1RRi63SgQb3
+2ifeW8w1SuCEvKKhlRi/3y6YhCf0nvjXWpa7hKmmrQKBgQDmDJQ6BRC86eGbnxPv
+I3WMPUpySjTYY50BS4EfSyD+FgvmwcEghArgp/3RXBrwvVDjMpNZgPqCeyOv+a0X
+3Ubqa0YYYYmIfAPZg/hVrQzX80YseAJxsaG2kLRK+CI9k+DJNp9Z5wtntkY4X14L
+CzQKGek6UJCGMlMxTCEkizO/HQKBgQDV9eOO26NOQ0K13i8hGRH8QjJt45Cb3C3b
+f/o7sn+0H10qAMFTQlGuxdgsBmoFrVgTqhiRfNG+S2M14dbvrDVVy0KDMHMhdDD6
+aIY86pCkX1X98PljJCB5MCsrNY5hezVUb8jZAHzTkZOqVamRWulz2FvJoLEl8Qnc
+1sWOFwXYBQKBgBP2bXpnbB9okDpH4Jv00MN9ohMu200Xv80X9zl29IL3+Mpqb87Z
+hnQeP8lGG9ReKUG95slyhsqB0wP3P4z9l6TJ8Eg3Vo7wbAkZCZitrpqisqkzNMsW
+5fiIsAx9YcNELNJpGgTcJsI2L/u+UtPUggyKWRHFYfUzMsLpX0rjhXcFAoGAJ/aq
+j1dk9ExJ3JBoeyUkn9p5ct8LdqE0i4gm5BmeErW9AAhuE7ASc7OOggKcsPzEs7+U
+oTAQORv5punM7K1ctO6nOLvG9VuvfkYhtKUXaSxJcooc+rCXxCsEFSkGtByARIow
+mJ+nsRjC3RDtADJb4oBp/IogLHcOIYqYEccpF0UCgYBpDvqCAaUTPweFHaYsHa8x
+sX1ET4wCmzlY4IWPBh+IvmxBWrKmvF8S4qI1c0SjzVDeNvf5OX+uUzPDLYSdAsVb
+y8liwnEZn23ufOOEbvi8dKTIDUzCjzIU38+p0KNC2PX+V0ccrx/w7lXFynbYsdfZ
+Zu/bK/JXhR9qEpxiswvG7A==
+-----END PRIVATE KEY-----
+`;
 
 const CONFIG = {
   webhookSecret: 'secret',
   openaiApiKey: 'x',
-  anthropicApiKey: 'x',
+  googleServiceAccountEmail: 'n8n-test@example.iam.gserviceaccount.com',
+  googleServiceAccountPrivateKey: TEST_PRIVATE_KEY,
+  vertexProjectId: 'example-project',
+  vertexRegion: 'global',
+  vertexClaudeModelId: 'claude-haiku-4-5',
   kintoneBaseUrl: 'https://example.cybozu.com',
   accountAppId: 1,
   accountApiToken: 'x',
@@ -44,14 +81,30 @@ function runNode<T = Record<string, unknown>>(jsCode: string, context: Record<st
   return fn(...argValues)[0];
 }
 
+// Build Vertex JWT はトップレベルawait(crypto.subtle.importKey/sign)を使う——n8nのCode
+// nodeはトップレベルawaitを標準サポートしているため、テスト側もAsyncFunctionで同じ実行
+// モデルを再現する(new Functionは同期関数しか作れずawaitを含むコードでSyntaxErrorになる)。
+const AsyncFunction = Object.getPrototypeOf(async () => undefined).constructor as new (...args: string[]) => (...args: unknown[]) => Promise<unknown>;
+async function runNodeAsync<T = Record<string, unknown>>(jsCode: string, context: Record<string, unknown>): Promise<{ json: T }> {
+  const argNames = Object.keys(context);
+  const argValues = Object.values(context);
+  const fn = new AsyncFunction(...argNames, jsCode);
+  const result = (await fn(...argValues)) as [{ json: T }];
+  return result[0];
+}
+
 describe('buildAgentWorkflow — generated Code node syntax', () => {
   const wf = buildAgentWorkflow(CONFIG);
   const codeNodeNames = (wf.nodes as WorkflowNodeLike[])
     .filter((n) => !!n.parameters?.jsCode)
     .map((n) => n.name);
 
+  // AsyncFunctionでチェックする——Build Vertex JWTのようにトップレベルawaitを使うノード
+  // (n8nのCode nodeが標準サポートする書き方)は、素のnew Functionだと構文エラーになる。
+  // AsyncFunctionはawaitを含まない既存の同期的なコードもそのまま実行できるため、全ノード
+  // 共通でこちらに統一して問題ない。
   it.each(codeNodeNames)('%s has syntactically valid jsCode', (name) => {
-    expect(() => new Function(jsCodeOf(wf.nodes, name))).not.toThrow();
+    expect(() => new AsyncFunction(jsCodeOf(wf.nodes, name))).not.toThrow();
   });
 
   it('every connection references a node that actually exists', () => {
@@ -600,30 +653,104 @@ describe('Build Narrate Comparison node', () => {
 // APIを採用する方針。httpRequestノードのjsonBody/urlはn8nの式({{ }})評価が必要なため
 // new Functionでは実行できず(Aggregate BI等のCode nodeとは違う)、静的な設定値だけを
 // 検証する——実際の疎通確認はデプロイ後にwebhookへ直接投げて確認する。
-describe('BI Narrative node (Anthropic Messages API)', () => {
+// RELVA_BI_開発方針報告書_v2.docx §3.5 — Vertex AI経由でClaudeを呼ぶ方式(社内のGCP
+// プロジェクトでサービスアカウントを発行する形をユーザーが選択したため、直接のAnthropic
+// APIキーではなくOAuth2アクセストークンで認証する)。トークン自体はBuild Vertex JWT/
+// Fetch Vertex Tokenの2ノードで用意し、BI Narrativeはそれを使うだけ。
+describe('Build Vertex JWT node (Google OAuth2 JWTベアラーグラント, RFC 7523)', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Build Vertex JWT');
+
+  // require("crypto")はn8nのCode node(task runner)で"Module 'crypto' is disallowed"として
+  // 実機で拒否されることを確認済み(実際にライブでこの回帰が発生した)——グローバルの
+  // Web Crypto API(crypto.subtle、requireを経由しない)へ書き換えた。トップレベルawaitを
+  // 使うため、テストもAsyncFunctionで同じ実行モデルを再現する(runNodeAsync)。
+  async function run(json: Record<string, unknown> = {}) {
+    return (await runNodeAsync<{ jwt: string }>(jsCode, { $json: json })).json;
+  }
+
+  it('produces a syntactically valid 3-part JWT whose header/claims round-trip correctly', async () => {
+    const out = await run({ sessionId: 's' });
+    const parts = out.jwt.split('.');
+    expect(parts).toHaveLength(3);
+
+    const decode = (b64url: string) => JSON.parse(Buffer.from(b64url.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+    const header = decode(parts[0]);
+    const claims = decode(parts[1]);
+    expect(header).toEqual({ alg: 'RS256', typ: 'JWT' });
+    expect(claims.iss).toBe(CONFIG.googleServiceAccountEmail);
+    expect(claims.scope).toBe('https://www.googleapis.com/auth/cloud-platform');
+    expect(claims.aud).toBe('https://oauth2.googleapis.com/token');
+    expect(claims.exp - claims.iat).toBe(3600);
+  });
+
+  it('signs the JWT with a signature verifiable against the service account public key (not just well-formed JSON)', async () => {
+    const out = await run();
+    const [headerB64, claimsB64, sigB64url] = out.jwt.split('.');
+    const signingInput = `${headerB64}.${claimsB64}`;
+    const signature = Buffer.from(sigB64url.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    const publicKey = crypto.createPublicKey(TEST_PRIVATE_KEY);
+    const ok = crypto.verify('RSA-SHA256', Buffer.from(signingInput), publicKey, signature);
+    expect(ok).toBe(true);
+  });
+
+  it('preserves whatever was already on $json (so downstream nodes still see biResult/biPlan etc.)', async () => {
+    const out = (await run({ sessionId: 's', biResult: { template: 'T1' } })) as unknown as { sessionId: string; biResult: { template: string } };
+    expect(out.sessionId).toBe('s');
+    expect(out.biResult).toEqual({ template: 'T1' });
+  });
+});
+
+describe('BI Narrative node (Claude on Vertex AI)', () => {
   const wf = buildAgentWorkflow(CONFIG);
   const node = (wf.nodes as WorkflowNodeLike[]).find((n) => n.name === 'BI Narrative') as {
     parameters?: { url?: string; jsonBody?: string; headerParameters?: { parameters: { name: string; value: string }[] } };
   };
 
-  it('targets the Anthropic Messages API endpoint (not OpenAI)', () => {
-    expect(node.parameters?.url).toBe('https://api.anthropic.com/v1/messages');
+  it('targets the Vertex AI publisher-model endpoint for the configured project/region/model (not the direct Anthropic API)', () => {
+    expect(node.parameters?.url).toBe(
+      'https://aiplatform.googleapis.com/v1/projects/example-project/locations/global/publishers/anthropic/models/claude-haiku-4-5:rawPredict',
+    );
   });
 
-  it('authenticates with x-api-key/anthropic-version, not an OpenAI Bearer token', () => {
+  it('uses a Bearer token from Fetch Vertex Token, not a static Anthropic API key', () => {
     const names = (node.parameters?.headerParameters?.parameters || []).map((p) => p.name);
-    expect(names).toContain('x-api-key');
-    expect(names).toContain('anthropic-version');
-    expect(names).not.toContain('Authorization');
+    expect(names).toContain('Authorization');
+    expect(names).not.toContain('x-api-key');
+    const auth = node.parameters?.headerParameters?.parameters.find((p) => p.name === 'Authorization');
+    expect(auth?.value).toContain('access_token');
   });
 
-  it('requests a Claude model with max_tokens and an assistant-prefilled "{" (Anthropic has no response_format: json_object)', () => {
+  it('puts anthropic_version in the body (not a header, per the Vertex AI request format) and omits "model" (it is in the URL)', () => {
     const body = node.parameters?.jsonBody || '';
-    expect(body).toContain('claude-haiku-4-5-20251001');
+    expect(body).toContain('anthropic_version: "vertex-2023-10-16"');
+    expect(body).not.toMatch(/model:\s*"claude/);
+  });
+
+  it('requests max_tokens with an assistant-prefilled "{" (Anthropic has no response_format: json_object) and includes comparisonFactSheet', () => {
+    const body = node.parameters?.jsonBody || '';
     expect(body).toContain('max_tokens');
     expect(body).toContain('role: "assistant"');
     expect(body).toContain('content: "{"');
     expect(body).toContain('comparisonFactSheet');
+  });
+});
+
+describe('Fetch Vertex Token node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const node = (wf.nodes as WorkflowNodeLike[]).find((n) => n.name === 'Fetch Vertex Token') as {
+    parameters?: { url?: string; contentType?: string; bodyParameters?: { parameters: { name: string; value: string }[] } };
+  };
+
+  it('targets Google\'s OAuth2 token endpoint with the JWT-bearer grant', () => {
+    expect(node.parameters?.url).toBe('https://oauth2.googleapis.com/token');
+    const params = node.parameters?.bodyParameters?.parameters || [];
+    expect(params.find((p) => p.name === 'grant_type')?.value).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
+    expect(params.find((p) => p.name === 'assertion')?.value).toContain('$json.jwt');
+  });
+
+  it('sends the body as form-urlencoded (the only content type Google\'s token endpoint accepts)', () => {
+    expect(node.parameters?.contentType).toBe('form-urlencoded');
   });
 });
 

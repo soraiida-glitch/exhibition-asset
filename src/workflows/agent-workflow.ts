@@ -10,6 +10,7 @@ import {
 import { aggregateEmbeddable } from '../semantic/aggregate';
 import { cardsEmbeddable } from '../semantic/cards';
 import { fiscalEmbeddable } from '../semantic/fiscal';
+import { vertexJwtEmbeddable } from '../lib/vertex-jwt';
 
 export const AGENT_WORKFLOW_NAME = '[kintone] 秘書AIエージェント';
 export const AGENT_WEBHOOK_PATH = 'exhibition-agent-chat';
@@ -18,9 +19,19 @@ export interface AgentWorkflowConfig {
   webhookSecret: string;
   openaiApiKey: string;
   /** RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイス(BI Narrative)は
-   * Anthropic Claude APIを採用する方針。既存の集計ルーティング・簡易文章生成(BI Router/
-   * Parse BI Plan)はOpenAIのまま継続し、この1箇所だけを置き換える。 */
-  anthropicApiKey: string;
+   * Claude(Anthropicのモデル)を採用する方針。既存の集計ルーティング・簡易文章生成(BI
+   * Router/Parse BI Plan)はOpenAIのまま継続し、この1箇所だけを置き換える。直接のAnthropic
+   * APIキーではなく、社内のGCPプロジェクトで発行したサービスアカウント経由でVertex AI
+   * (Model Garden上のAnthropicモデル)を呼ぶ方式を採用した(ユーザーの選択)。n8n(自前構築の
+   * 単一GCP VM構成、ただし当該サービスアカウントはVMには紐付いていない)からは、サービス
+   * アカウントのJSON鍵(client_email/private_key)でJWTを自己署名し、Googleの
+   * OAuth2トークンエンドポイントと交換して取得したアクセストークンを使う
+   * (Build Vertex JWT/Fetch Vertex Tokenノード参照)。 */
+  googleServiceAccountEmail: string;
+  googleServiceAccountPrivateKey: string;
+  vertexProjectId: string;
+  vertexRegion: string;
+  vertexClaudeModelId: string;
   kintoneBaseUrl: string;
   accountAppId: number;
   accountApiToken: string;
@@ -316,14 +327,6 @@ export function buildAgentWorkflow(config: AgentWorkflowConfig) {
   const kintoneHeader = (token: string) => [{ name: 'X-Cybozu-API-Token', value: token }];
   const openaiHeaders = () => [
     { name: 'Authorization', value: `Bearer ${config.openaiApiKey}` },
-    { name: 'Content-Type', value: 'application/json' },
-  ];
-  // RELVA_BI_開発方針報告書_v2.docx §3.5 — BI Narrative(AIによるインサイト・アドバイス)専用。
-  // Anthropic Messages APIはOpenAIと違い、キーは x-api-key ヘッダで渡し、anthropic-version
-  // ヘッダが必須。
-  const anthropicHeaders = () => [
-    { name: 'x-api-key', value: config.anthropicApiKey },
-    { name: 'anthropic-version', value: '2023-06-01' },
     { name: 'Content-Type', value: 'application/json' },
   ];
   const supabaseHeaders = () => [
@@ -1293,6 +1296,59 @@ return [{ json: {
       },
     },
     {
+      // RELVA_BI_開発方針報告書_v2.docx §3.5 — Vertex AI(サービスアカウント経由でのClaude
+      // 呼び出し)は直接のAPIキーではなくOAuth2アクセストークンが必要。トークンは自前で
+      // 用意する必要がある(n8nの管理された認証情報ストアは使わず、このプロジェクトの他の
+      // 秘密情報と同じくヘッダーに直接埋め込む既存方針を踏襲するため)——サービスアカウントの
+      // client_email/private_keyから自己署名JWTを組み立て(Google OAuth2のJWTベアラーフロー、
+      // RFC 7523)、Googleのトークンエンドポイントとアクセストークンに交換する2段階。
+      id: 'build_vertex_jwt',
+      name: 'Build Vertex JWT',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        // require("crypto")はn8nのCode node(task runner)のサンドボックスで
+        // "Module 'crypto' is disallowed" として明示的にブロックされ、グローバルの
+        // crypto(Web Crypto API)も存在しない("crypto is not defined")——どちらも実機で
+        // 確認済み。そのため、SHA-256・RSA署名・PKCS8鍵のDERパースをBuffer/BigIntだけで
+        // 自前実装したvertex-jwt.ts(requireもcrypto拡張も一切使わない)を埋め込む。
+        jsCode: `
+${vertexJwtEmbeddable()}
+
+const SERVICE_ACCOUNT_EMAIL = ${JSON.stringify(config.googleServiceAccountEmail)};
+const PRIVATE_KEY_PEM = ${JSON.stringify(config.googleServiceAccountPrivateKey)};
+
+const jwt = buildGoogleServiceAccountJwt(SERVICE_ACCOUNT_EMAIL, PRIVATE_KEY_PEM, Math.floor(Date.now() / 1000));
+
+return [{ json: { ...$json, jwt } }];
+`.trim(),
+      },
+    },
+    {
+      id: 'fetch_vertex_token',
+      name: 'Fetch Vertex Token',
+      type: 'n8n-nodes-base.httpRequest',
+      typeVersion: 4.2,
+      position: nextBiPos(),
+      parameters: {
+        // RFC 7523のJWTベアラーグラント。GoogleのトークンエンドポイントはOAuth2標準どおり
+        // application/x-www-form-urlencodedのみを受け付ける。
+        method: 'POST',
+        url: 'https://oauth2.googleapis.com/token',
+        sendBody: true,
+        contentType: 'form-urlencoded',
+        specifyBody: 'keypair',
+        bodyParameters: {
+          parameters: [
+            { name: 'grant_type', value: 'urn:ietf:params:oauth:grant-type:jwt-bearer' },
+            { name: 'assertion', value: '={{ $json.jwt }}' },
+          ],
+        },
+        options: {},
+      },
+    },
+    {
       id: 'bi_narrative',
       name: 'BI Narrative',
       type: 'n8n-nodes-base.httpRequest',
@@ -1300,15 +1356,24 @@ return [{ json: {
       position: nextBiPos(),
       parameters: {
         method: 'POST',
-        // RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイスはAnthropic
-        // Claude APIを採用する方針(既存の集計ルーティング/簡易文章生成はOpenAIのまま継続、
-        // この1ノードだけを置き換える)。Anthropic Messages APIにはOpenAIのresponse_format:
-        // json_objectに相当する機能が無いため、assistantメッセージを"{"でprefillして応答を
-        // JSONの続きとして強制する定番の手法を使う(Format BI Response側で"{"を復元してから
-        // JSON.parseする)。
-        url: 'https://api.anthropic.com/v1/messages',
+        // RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイスはClaude
+        // (Anthropicのモデル)を採用する方針(既存の集計ルーティング/簡易文章生成はOpenAIの
+        // まま継続、この1ノードだけを置き換える)。Vertex AI経由でのAnthropicモデル呼び出しは
+        // 直接のAnthropic Messages APIとほぼ同じリクエスト形だが、(1)モデルIDはURLパスに含み
+        // bodyには含めない、(2)anthropic_versionはヘッダーではなくbody直下のフィールドとして
+        // 渡す、という2点が異なる(Google公式ドキュメントの形式)。OpenAIのresponse_format:
+        // json_objectに相当する機能がAnthropicには無いため、assistantメッセージを"{"でprefill
+        // して応答をJSONの続きとして強制する定番の手法を使う(Format BI Response側で"{"を
+        // 復元してからJSON.parseする——レスポンス自体の形はAnthropicのMessages APIと同じ
+        // content[0].textなので、Format BI Response側の変更は不要)。
+        url: `https://${config.vertexRegion === 'global' ? '' : config.vertexRegion + '-'}aiplatform.googleapis.com/v1/projects/${config.vertexProjectId}/locations/${config.vertexRegion}/publishers/anthropic/models/${config.vertexClaudeModelId}:rawPredict`,
         sendHeaders: true,
-        headerParameters: { parameters: anthropicHeaders() },
+        headerParameters: {
+          parameters: [
+            { name: 'Authorization', value: '=Bearer {{ $json.access_token }}' },
+            { name: 'Content-Type', value: 'application/json' },
+          ],
+        },
         sendBody: true,
         specifyBody: 'json',
         // biResult をそのまま渡さない(円の生数値を渡すとLLMが自分で万円換算して桁を間違える
@@ -1316,7 +1381,7 @@ return [{ json: {
         // Build Narrate Comparison)が組み立てた表示確定済みのfactSheet/comparisonFactSheet
         // だけを渡す。query/refine/narrateのどれが実行されたかに関わらず、必ず
         // Prepare BI Narrative Input(集約ノード)を経由した名前で参照する。
-        jsonBody: `={{ JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 300, system: ${JSON.stringify(BI_NARRATIVE_SYSTEM_PROMPT)}, messages: [ { role: "user", content: JSON.stringify({ title: $node["Prepare BI Narrative Input"].json.biResult.title, interpretation: $node["Prepare BI Narrative Input"].json.biResult.interpretation, factSheet: $node["Prepare BI Narrative Input"].json.factSheet, comparisonFactSheet: $node["Prepare BI Narrative Input"].json.comparisonFactSheet || null }) }, { role: "assistant", content: "{" } ] }) }}`,
+        jsonBody: `={{ JSON.stringify({ anthropic_version: "vertex-2023-10-16", max_tokens: 300, system: ${JSON.stringify(BI_NARRATIVE_SYSTEM_PROMPT)}, messages: [ { role: "user", content: JSON.stringify({ title: $node["Prepare BI Narrative Input"].json.biResult.title, interpretation: $node["Prepare BI Narrative Input"].json.biResult.interpretation, factSheet: $node["Prepare BI Narrative Input"].json.factSheet, comparisonFactSheet: $node["Prepare BI Narrative Input"].json.comparisonFactSheet || null }) }, { role: "assistant", content: "{" } ] }) }}`,
         options: {},
       },
     },
@@ -2010,11 +2075,15 @@ return [{ json: {
     'Prepare BI Narrative Input': { main: [[{ node: 'BI Aggregate OK?', type: 'main', index: 0 }]] },
     'BI Aggregate OK?': {
       main: [
-        [{ node: 'BI Narrative', type: 'main', index: 0 }],
+        // 集計に成功した場合だけVertex AIのトークン取得〜LLM呼び出しへ進む(失敗時に
+        // 無駄なトークン取得を行わないため)。
+        [{ node: 'Build Vertex JWT', type: 'main', index: 0 }],
         [{ node: 'Format BI Error', type: 'main', index: 0 }],
       ],
     },
     'Format BI Error': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
+    'Build Vertex JWT': { main: [[{ node: 'Fetch Vertex Token', type: 'main', index: 0 }]] },
+    'Fetch Vertex Token': { main: [[{ node: 'BI Narrative', type: 'main', index: 0 }]] },
     'BI Narrative': { main: [[{ node: 'Format BI Response', type: 'main', index: 0 }]] },
     'Format BI Response': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
     // ---- RELVA BI サブグラフここまで ----

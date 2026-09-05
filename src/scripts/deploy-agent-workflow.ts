@@ -19,10 +19,25 @@ async function main() {
     console.log('Generated a new N8N_WEBHOOK_SECRET and wrote it to .env');
   }
 
+  // RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイス(BI Narrative)は
+  // 直接のAnthropic APIキーではなく、GCPのサービスアカウント(Vertex AI経由)でClaudeを呼ぶ。
+  // .envにはJSON鍵ファイル全体をbase64化した1つの値として保存してある(private_keyの改行を
+  // .envにそのまま書けないため)ので、ここでデコード・パースしてclient_email/private_keyを
+  // 取り出す。
+  const serviceAccountKeyBase64 = requireEnvValue('GOOGLE_SERVICE_ACCOUNT_KEY_BASE64', env.googleServiceAccountKeyBase64);
+  const serviceAccountKey = JSON.parse(Buffer.from(serviceAccountKeyBase64, 'base64').toString('utf8')) as {
+    client_email: string;
+    private_key: string;
+  };
+
   const workflow = buildAgentWorkflow({
     webhookSecret,
     openaiApiKey: requireEnvValue('OPENAI_API_KEY', env.openaiApiKey),
-    anthropicApiKey: requireEnvValue('ANTHROPIC_API_KEY', env.anthropicApiKey),
+    googleServiceAccountEmail: serviceAccountKey.client_email,
+    googleServiceAccountPrivateKey: serviceAccountKey.private_key,
+    vertexProjectId: requireEnvValue('VERTEX_PROJECT_ID', env.vertexProjectId),
+    vertexRegion: requireEnvValue('VERTEX_REGION', env.vertexRegion),
+    vertexClaudeModelId: requireEnvValue('VERTEX_CLAUDE_MODEL_ID', env.vertexClaudeModelId),
     kintoneBaseUrl: `https://${env.kintoneSubdomain}.cybozu.com`,
     accountAppId: requireAppId(env, 'kintoneAppIdAccount'),
     accountApiToken: requireEnvValue('KINTONE_API_TOKEN_ACCOUNT', env.kintoneApiTokenAccount),
