@@ -17,6 +17,10 @@ export const AGENT_WEBHOOK_PATH = 'exhibition-agent-chat';
 export interface AgentWorkflowConfig {
   webhookSecret: string;
   openaiApiKey: string;
+  /** RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイス(BI Narrative)は
+   * Anthropic Claude APIを採用する方針。既存の集計ルーティング・簡易文章生成(BI Router/
+   * Parse BI Plan)はOpenAIのまま継続し、この1箇所だけを置き換える。 */
+  anthropicApiKey: string;
   kintoneBaseUrl: string;
   accountAppId: number;
   accountApiToken: string;
@@ -271,15 +275,26 @@ query または clarify になります)。
  * ナレーション生成。「815万円」を「8,150万円」と一桁多く言う事故が実際に本番で発生した
  * (Aggregate BI が円の生数値をそのまま渡し、LLM自身に万円変換を計算させていたのが原因)ため、
  * Aggregate BI 側で表記を確定させた factSheet だけを渡し、LLMには引用のみをさせる。
+ *
+ * RELVA_BI_開発方針報告書_v2.docx §3.5 — comparisonFactSheet(前期/先月/先々月の同じ集計。
+ * fiscal.tsのresolveComparisonRange+aggregate.tsのbuildComparisonFactSheetで決定的に算出済み)
+ * が付いている場合は、それも同じ「引用のみ」の原則で使い、傾向・増減のコメントに繋げる。
  */
 export const BI_NARRATIVE_SYSTEM_PROMPT = `あなたはBIチャットの一言コメント生成器です。与えられたJSON({title, interpretation,
-factSheet})を読み、日本語で1〜2文の短いコメントを書いてください。
+factSheet, comparisonFactSheet})を読み、日本語で1〜2文の短いコメントを書いてください。
 
-factSheetに書かれている数値・単位の表記(「約815万円」「40.0%」のような書式)は既に
-確定済みの表示用文字列です。そのまま引用してください——万円への換算やパーセントへの変換、
-桁の書き直しなど、表記を自分で計算し直すことは絶対にしないでください(単位を書き換えると
-桁を間違えます)。factSheetに無い数値を新しく計算したり発明したりもしないでください。
-断定的な結論よりも、気づきや次のアクションにつながる短いコメントを心がけてください。
+factSheet・comparisonFactSheetに書かれている数値・単位の表記(「約815万円」「40.0%」のような
+書式)は既に確定済みの表示用文字列です。そのまま引用してください——万円への換算やパーセントへの
+変換、桁の書き直し、増減率の計算など、表記や数値を自分で計算し直すことは絶対にしないでください
+(単位を書き換えると桁を間違えます)。factSheet・comparisonFactSheetに無い数値を新しく計算したり
+発明したりもしないでください。
+
+comparisonFactSheetがある場合は、それが直前の同種期間(前期/先月/先々月)の同じ指標です。
+factSheetの数値と見比べて、増えた/減った/横ばいといった傾向を一言添えてください——ただし
+両方の数値をそのまま引用するだけにとどめ、差分や増減率をあなた自身で計算しないでください
+(例:「前期は約700万円、今期は約815万円です」のように両方の表記をそのまま並べるのは良いが、
+「約16%増加しました」のような自分で計算した数値は書かないでください)。comparisonFactSheetが
+無い場合は、factSheetだけを見て気づきや次のアクションにつながる短いコメントを書いてください。
 
 必ず次のJSON形式のみで回答してください(説明文は不要): {"narrative": "コメント本文"}`;
 
@@ -301,6 +316,14 @@ export function buildAgentWorkflow(config: AgentWorkflowConfig) {
   const kintoneHeader = (token: string) => [{ name: 'X-Cybozu-API-Token', value: token }];
   const openaiHeaders = () => [
     { name: 'Authorization', value: `Bearer ${config.openaiApiKey}` },
+    { name: 'Content-Type', value: 'application/json' },
+  ];
+  // RELVA_BI_開発方針報告書_v2.docx §3.5 — BI Narrative(AIによるインサイト・アドバイス)専用。
+  // Anthropic Messages APIはOpenAIと違い、キーは x-api-key ヘッダで渡し、anthropic-version
+  // ヘッダが必須。
+  const anthropicHeaders = () => [
+    { name: 'x-api-key', value: config.anthropicApiKey },
+    { name: 'anthropic-version', value: '2023-06-01' },
     { name: 'Content-Type', value: 'application/json' },
   ];
   const supabaseHeaders = () => [
@@ -1109,6 +1132,52 @@ return [{ json: { ...original, opportunityRecords, leadRecords } }];
       },
     },
     {
+      id: 'route_after_datasets_if',
+      name: 'Route After Datasets?',
+      type: 'n8n-nodes-base.if',
+      typeVersion: 1,
+      position: nextBiPos(),
+      parameters: {
+        // RELVA_BI_開発方針報告書_v2.docx §3.5 拡張 — narrateも「前期/先月/先々月との比較」
+        // コメントを出せるよう、query/refineと同じ共有フェッチ/キャッシュ経路(Check Dataset
+        // Cache〜Prepare BI Datasets)をnarrateにも通す(Build Narrate Inputの接続先を
+        // Check Dataset Cacheに変更——下のconnections参照)。narrate自体の確定済み表示結果
+        // (biResult)は一切再計算しない——Prepare BI Datasetsで手に入ったopportunityRecords/
+        // leadRecordsは、比較期間の集計にだけ使う。
+        conditions: {
+          boolean: [{ value1: '={{ $node["Parse BI Plan"].json.biPlan.op === "narrate" }}', value2: true }],
+        },
+      },
+    },
+    {
+      id: 'build_narrate_comparison',
+      name: 'Build Narrate Comparison',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        jsCode: `
+${aggregateEmbeddable()}
+${fiscalEmbeddable()}
+
+const original = $node["Build Narrate Input"].json;
+if (!original.biResult) return [{ json: original }];
+
+const plan = original.biPlan;
+const opportunityRecords = $node["Prepare BI Datasets"].json.opportunityRecords || [];
+const leadRecords = $node["Prepare BI Datasets"].json.leadRecords || [];
+
+const period = plan.period || "current_fiscal_year";
+const comparisonRange = resolveComparisonRange(period, new Date());
+const comparisonFactSheet = comparisonRange
+  ? buildComparisonFactSheet({ opportunityRecords, leadRecords }, plan, new Date(), comparisonRange, COMPARISON_PERIOD_LABELS[period] || "")
+  : null;
+
+return [{ json: { ...original, comparisonFactSheet } }];
+`.trim(),
+      },
+    },
+    {
       id: 'aggregate_bi',
       name: 'Aggregate BI',
       type: 'n8n-nodes-base.code',
@@ -1138,6 +1207,38 @@ if (!outcome.ok) {
 }
 
 return [{ json: { ...original, biResult: outcome.biResult, factSheet: outcome.factSheet } }];
+`.trim(),
+      },
+    },
+    {
+      id: 'build_comparison',
+      name: 'Build Comparison',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: nextBiPos(),
+      parameters: {
+        // RELVA_BI_開発方針報告書_v2.docx §3.5 — 「AIによるインサイト・アドバイス」向けに、
+        // 直前の同種期間(前期/先月/先々月)を同じmetric/dimensionで集計しておく。BI Narrative
+        // (LLM)には既にこの文字列を渡すだけで、期間の解決・集計自体はここで決定的に行う
+        // (§1: LLMに数値計算をさせない絶対原則)。
+        jsCode: `
+${aggregateEmbeddable()}
+${fiscalEmbeddable()}
+
+const original = $json;
+if (!original.biResult) return [{ json: original }];
+
+const plan = original.biPlan;
+const opportunityRecords = $node["Prepare BI Datasets"].json.opportunityRecords || [];
+const leadRecords = $node["Prepare BI Datasets"].json.leadRecords || [];
+
+const period = plan.period || "current_fiscal_year";
+const comparisonRange = resolveComparisonRange(period, new Date());
+const comparisonFactSheet = comparisonRange
+  ? buildComparisonFactSheet({ opportunityRecords, leadRecords }, plan, new Date(), comparisonRange, COMPARISON_PERIOD_LABELS[period] || "")
+  : null;
+
+return [{ json: { ...original, comparisonFactSheet } }];
 `.trim(),
       },
     },
@@ -1199,16 +1300,23 @@ return [{ json: {
       position: nextBiPos(),
       parameters: {
         method: 'POST',
-        url: 'https://api.openai.com/v1/chat/completions',
+        // RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイスはAnthropic
+        // Claude APIを採用する方針(既存の集計ルーティング/簡易文章生成はOpenAIのまま継続、
+        // この1ノードだけを置き換える)。Anthropic Messages APIにはOpenAIのresponse_format:
+        // json_objectに相当する機能が無いため、assistantメッセージを"{"でprefillして応答を
+        // JSONの続きとして強制する定番の手法を使う(Format BI Response側で"{"を復元してから
+        // JSON.parseする)。
+        url: 'https://api.anthropic.com/v1/messages',
         sendHeaders: true,
-        headerParameters: { parameters: openaiHeaders() },
+        headerParameters: { parameters: anthropicHeaders() },
         sendBody: true,
         specifyBody: 'json',
         // biResult をそのまま渡さない(円の生数値を渡すとLLMが自分で万円換算して桁を間違える
-        // ——実際に本番で発生した)。Aggregate BI/Build Narrate Input が組み立てた表示確定済みの
-        // factSheet だけを渡す。query/refine/narrateのどれが実行されたかに関わらず、必ず
+        // ——実際に本番で発生した)。Aggregate BI/Build Narrate Input(→Build Comparison/
+        // Build Narrate Comparison)が組み立てた表示確定済みのfactSheet/comparisonFactSheet
+        // だけを渡す。query/refine/narrateのどれが実行されたかに関わらず、必ず
         // Prepare BI Narrative Input(集約ノード)を経由した名前で参照する。
-        jsonBody: `={{ JSON.stringify({ model: "gpt-4o-mini", response_format: { type: "json_object" }, messages: [ { role: "system", content: ${JSON.stringify(BI_NARRATIVE_SYSTEM_PROMPT)} }, { role: "user", content: JSON.stringify({ title: $node["Prepare BI Narrative Input"].json.biResult.title, interpretation: $node["Prepare BI Narrative Input"].json.biResult.interpretation, factSheet: $node["Prepare BI Narrative Input"].json.factSheet }) } ] }) }}`,
+        jsonBody: `={{ JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 300, system: ${JSON.stringify(BI_NARRATIVE_SYSTEM_PROMPT)}, messages: [ { role: "user", content: JSON.stringify({ title: $node["Prepare BI Narrative Input"].json.biResult.title, interpretation: $node["Prepare BI Narrative Input"].json.biResult.interpretation, factSheet: $node["Prepare BI Narrative Input"].json.factSheet, comparisonFactSheet: $node["Prepare BI Narrative Input"].json.comparisonFactSheet || null }) }, { role: "assistant", content: "{" } ] }) }}`,
         options: {},
       },
     },
@@ -1226,7 +1334,9 @@ return [{ json: {
 const original = $node["Prepare BI Narrative Input"].json;
 let narrative = "";
 try {
-  const parsed = JSON.parse($json.choices[0].message.content);
+  // BI Narrative(Anthropic Messages API)はassistantメッセージを"{"でprefillして呼んで
+  // いるため、応答本文はJSONの続きだけが返る——"{"を復元してからパースする。
+  const parsed = JSON.parse("{" + $json.content[0].text);
   narrative = typeof parsed.narrative === "string" ? parsed.narrative : "";
 } catch (e) {
   narrative = "";
@@ -1860,15 +1970,18 @@ return [{ json: {
       ],
     },
     'Format BI Clarify': { main: [[{ node: 'Prepare Final Response', type: 'main', index: 0 }]] },
-    // narrate(直前のカードについて話す)は集計を一切バイパスする。query/refineは
-    // Check Dataset Cache(§7 — TTL付きキャッシュ)を経由してからkintoneフェッチ/集計へ進む。
+    // narrateも(直前のカードの再集計こそしないが)query/refineと同じ共有フェッチ/キャッシュ
+    // 経路(Check Dataset Cache〜Prepare BI Datasets)を通す——前期/先月/先々月との比較コメント
+    // (Build Narrate Comparison/Build Comparison、RELVA_BI_開発方針報告書_v2.docx §3.5)に
+    // 使うopportunityRecords/leadRecordsが必要なため。データセットキャッシュ(§7)がヒットする
+    // 限り、この追加フェッチはSupabaseへの1回のGETで済み、kintoneへは行かない。
     'Is Narrate?': {
       main: [
         [{ node: 'Build Narrate Input', type: 'main', index: 0 }],
         [{ node: 'Check Dataset Cache', type: 'main', index: 0 }],
       ],
     },
-    'Build Narrate Input': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
+    'Build Narrate Input': { main: [[{ node: 'Check Dataset Cache', type: 'main', index: 0 }]] },
     'Check Dataset Cache': { main: [[{ node: 'Collect Dataset Cache Rows', type: 'main', index: 0 }]] },
     'Collect Dataset Cache Rows': { main: [[{ node: 'Dataset Cache Hit?', type: 'main', index: 0 }]] },
     'Dataset Cache Hit?': {
@@ -1882,8 +1995,18 @@ return [{ json: {
     'Fetch BI Leads': { main: [[{ node: 'Write Dataset Cache', type: 'main', index: 0 }]] },
     'Write Dataset Cache': { main: [[{ node: 'Build Fetched Datasets', type: 'main', index: 0 }]] },
     'Build Fetched Datasets': { main: [[{ node: 'Prepare BI Datasets', type: 'main', index: 0 }]] },
-    'Prepare BI Datasets': { main: [[{ node: 'Aggregate BI', type: 'main', index: 0 }]] },
-    'Aggregate BI': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
+    // Prepare BI Datasetsから先は、元がnarrateだったかどうかで分岐する(Route After
+    // Datasets?はParse BI Planを直接参照するため、ここまでの経路に関係なく正しく判定できる)。
+    'Prepare BI Datasets': { main: [[{ node: 'Route After Datasets?', type: 'main', index: 0 }]] },
+    'Route After Datasets?': {
+      main: [
+        [{ node: 'Build Narrate Comparison', type: 'main', index: 0 }],
+        [{ node: 'Aggregate BI', type: 'main', index: 0 }],
+      ],
+    },
+    'Build Narrate Comparison': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
+    'Aggregate BI': { main: [[{ node: 'Build Comparison', type: 'main', index: 0 }]] },
+    'Build Comparison': { main: [[{ node: 'Prepare BI Narrative Input', type: 'main', index: 0 }]] },
     'Prepare BI Narrative Input': { main: [[{ node: 'BI Aggregate OK?', type: 'main', index: 0 }]] },
     'BI Aggregate OK?': {
       main: [

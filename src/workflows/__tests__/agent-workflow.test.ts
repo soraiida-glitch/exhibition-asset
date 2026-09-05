@@ -4,6 +4,7 @@ import { buildAgentWorkflow } from '../agent-workflow';
 const CONFIG = {
   webhookSecret: 'secret',
   openaiApiKey: 'x',
+  anthropicApiKey: 'x',
   kintoneBaseUrl: 'https://example.cybozu.com',
   accountAppId: 1,
   accountApiToken: 'x',
@@ -387,6 +388,49 @@ describe('Aggregate BI node', () => {
   });
 });
 
+// RELVA_BI_開発方針報告書_v2.docx §3.5(AIによるインサイト・アドバイス)— query/refineの
+// Aggregate BIの直後で、前期/先月/先々月との比較用factSheetを組み立てる。BI Narrative
+// (LLM)にはこの文字列を渡すだけで、期間の解決・集計自体はここで決定的に行う。
+describe('Build Comparison node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Build Comparison');
+
+  function run(prevOutput: Record<string, unknown>, opportunityRecords: unknown[], leadRecords: unknown[] = []) {
+    const $node = { 'Prepare BI Datasets': { json: { opportunityRecords, leadRecords } } };
+    return runNode<{ comparisonFactSheet?: string | null; biResult?: unknown }>(jsCode, { $json: prevOutput, $node }).json;
+  }
+
+  // 2020年の日付なので、このテストが実際に実行される時刻がいつであっても
+  // 「前期(直前の同種期間)」のレンジには入らない——実行時刻に依存しない安定したfixture。
+  const OLD_OPPS = [{ stage: { value: '成約' }, amount: { value: '1000000' }, owner: { value: '佐藤' }, close_date: { value: '2020-05-01' } }];
+
+  it('passes the upstream output through unchanged when Aggregate BI itself failed (no biResult)', () => {
+    const out = run({ biAggregateError: 'x', biPlan: { template: 'T1', metric: 'count' } }, OLD_OPPS);
+    expect(out.comparisonFactSheet).toBeUndefined();
+  });
+
+  it('produces null for a scatter plan (no single "1つ前の期間" for per-record points)', () => {
+    const out = run({ biResult: { template: 'T2' }, biPlan: { template: 'T2', dimension: 'owner', scatter: true } }, OLD_OPPS);
+    expect(out.comparisonFactSheet).toBeNull();
+  });
+
+  it('produces null for a month-trend plan (already covers a whole date range, not a single "前の期間")', () => {
+    const out = run({ biResult: { template: 'T2' }, biPlan: { template: 'T2', metric: 'count', timeGranularity: 'month' } }, OLD_OPPS);
+    expect(out.comparisonFactSheet).toBeNull();
+  });
+
+  it('produces null when period is "all" (no single comparison period exists)', () => {
+    const out = run({ biResult: { template: 'T1' }, biPlan: { template: 'T1', metric: 'count', period: 'all' } }, OLD_OPPS);
+    expect(out.comparisonFactSheet).toBeNull();
+  });
+
+  it('computes a real "前期" comparison factSheet for a plain T1 plan', () => {
+    const out = run({ biResult: { template: 'T1' }, biPlan: { template: 'T1', metric: 'count', period: 'current_fiscal_year' } }, OLD_OPPS);
+    // OLD_OPPS(2020-05-01)は前期のレンジ(直近1年強)には入らないため0件。
+    expect(out.comparisonFactSheet).toBe('前期: 件数: 0件');
+  });
+});
+
 // RELVA BI 追加要件定義書 §7: query/refineのたびに毎回kintoneへ500件フェッチし直すのを避ける
 // ためのデータセットキャッシュ。キャッシュヒット/ミスのどちらでも、後続のAggregate BIが読む
 // Prepare BI Datasetsの形(opportunityRecords/leadRecords)へ正規化する2つのノードを検証する。
@@ -516,6 +560,73 @@ describe('Build Narrate Input node', () => {
   });
 });
 
+// RELVA_BI_開発方針報告書_v2.docx §3.5拡張 — narrateも(直前のカードの再集計こそしないが)
+// 前期/先月/先々月との比較用factSheetを組み立てられるよう、Route After Datasets?経由で
+// Prepare BI Datasets(query/refineと共有のフェッチ/キャッシュ経路)を通ってからここに来る。
+describe('Build Narrate Comparison node', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const jsCode = jsCodeOf(wf.nodes, 'Build Narrate Comparison');
+
+  function run(buildNarrateInputOutput: Record<string, unknown>, opportunityRecords: unknown[], leadRecords: unknown[] = []) {
+    const $node = {
+      'Build Narrate Input': { json: buildNarrateInputOutput },
+      'Prepare BI Datasets': { json: { opportunityRecords, leadRecords } },
+    };
+    return runNode<{ comparisonFactSheet?: string | null; biResult?: unknown }>(jsCode, { $node }).json;
+  }
+
+  const OLD_OPPS = [{ stage: { value: '成約' }, amount: { value: '1000000' }, owner: { value: '佐藤' }, close_date: { value: '2020-05-01' } }];
+
+  it('passes through unchanged when Build Narrate Input itself errored (currentCard missing data)', () => {
+    const out = run({ biAggregateError: '見つかりませんでした' }, OLD_OPPS);
+    expect(out.comparisonFactSheet).toBeUndefined();
+  });
+
+  it('computes a real "前期" comparison factSheet for the currentCard\'s template/metric', () => {
+    const out = run(
+      { biResult: { template: 'T1' }, biPlan: { template: 'T1', metric: 'count', period: 'current_fiscal_year' } },
+      OLD_OPPS,
+    );
+    expect(out.comparisonFactSheet).toBe('前期: 件数: 0件');
+  });
+
+  it('produces null for a scatter/month-trend currentCard, same guardrail as Build Comparison', () => {
+    const out = run({ biResult: { template: 'T2' }, biPlan: { template: 'T2', dimension: 'owner', scatter: true } }, OLD_OPPS);
+    expect(out.comparisonFactSheet).toBeNull();
+  });
+});
+
+// RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイスはAnthropic Claude
+// APIを採用する方針。httpRequestノードのjsonBody/urlはn8nの式({{ }})評価が必要なため
+// new Functionでは実行できず(Aggregate BI等のCode nodeとは違う)、静的な設定値だけを
+// 検証する——実際の疎通確認はデプロイ後にwebhookへ直接投げて確認する。
+describe('BI Narrative node (Anthropic Messages API)', () => {
+  const wf = buildAgentWorkflow(CONFIG);
+  const node = (wf.nodes as WorkflowNodeLike[]).find((n) => n.name === 'BI Narrative') as {
+    parameters?: { url?: string; jsonBody?: string; headerParameters?: { parameters: { name: string; value: string }[] } };
+  };
+
+  it('targets the Anthropic Messages API endpoint (not OpenAI)', () => {
+    expect(node.parameters?.url).toBe('https://api.anthropic.com/v1/messages');
+  });
+
+  it('authenticates with x-api-key/anthropic-version, not an OpenAI Bearer token', () => {
+    const names = (node.parameters?.headerParameters?.parameters || []).map((p) => p.name);
+    expect(names).toContain('x-api-key');
+    expect(names).toContain('anthropic-version');
+    expect(names).not.toContain('Authorization');
+  });
+
+  it('requests a Claude model with max_tokens and an assistant-prefilled "{" (Anthropic has no response_format: json_object)', () => {
+    const body = node.parameters?.jsonBody || '';
+    expect(body).toContain('claude-haiku-4-5-20251001');
+    expect(body).toContain('max_tokens');
+    expect(body).toContain('role: "assistant"');
+    expect(body).toContain('content: "{"');
+    expect(body).toContain('comparisonFactSheet');
+  });
+});
+
 // RELVA BI 追加要件定義書 §3: カード=テンプレインスタンス統一モデル。Format BI Responseは
 // query/refine/narrateのどれが実行されても、同じ形のcardSpecをフロントエンドへ返す必要がある
 // (フロントエンドはこれをcurrentCardとして保持し、次のリクエストに載せて送り返す)。
@@ -538,10 +649,17 @@ describe('Format BI Response node', () => {
     };
   }
 
-  function run(prepareOutput: Record<string, unknown>, narrativeContent: string) {
+  // BI Narrative(Anthropic Messages API)はassistantメッセージを"{"でprefillして呼んでいる
+  // ため、応答本文はJSONの続き(先頭の"{"を除いたもの)だけが返る。
+  function run(prepareOutput: Record<string, unknown>, anthropicResponseText: string) {
     const $node = { 'Prepare BI Narrative Input': { json: prepareOutput } };
-    const $json = { choices: [{ message: { content: narrativeContent } }] };
+    const $json = { content: [{ type: 'text', text: anthropicResponseText }] };
     return runNode<FormatBiResponseOutput>(jsCode, { $node, $json }).json;
+  }
+
+  // 実運用のprefillの形(先頭"{"無し)をテストでも再現するヘルパー。
+  function runWithNarrative(prepareOutput: Record<string, unknown>, narrativeObj: { narrative: string }) {
+    return run(prepareOutput, JSON.stringify(narrativeObj).slice(1));
   }
 
   const biResult = {
@@ -554,7 +672,7 @@ describe('Format BI Response node', () => {
   const biPlan = { template: 'T2', metric: 'amount_sum', dimension: 'owner', dimensionB: undefined, period: 'current_fiscal_year', filters: [] };
 
   it('builds a cardSpec whose params mirror biPlan, regardless of whether query/refine/narrate produced it', () => {
-    const out = run({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, JSON.stringify({ narrative: '飯田さんが最も多く受注しています。' }));
+    const out = runWithNarrative({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, { narrative: '飯田さんが最も多く受注しています。' });
     expect(out.response.cardSpec).toEqual({
       template: 'T2',
       params: { metric: 'amount_sum', dimension: 'owner', dimensionB: undefined, filters: [], period: { preset: 'current_fiscal_year' } },
@@ -565,6 +683,16 @@ describe('Format BI Response node', () => {
     });
   });
 
+  // BI NarrativeがAnthropic Messages APIに変わった後も、assistantメッセージのprefill
+  // ("{" — jsonBody参照)から返ってきた応答本文を正しく組み立て直してパースできることの
+  // 回帰テスト。ここが壊れると、有効な応答でもnarrativeが常に空文字列にフォールバック
+  // してしまう(この回帰は実際に発生した——parsing先を$json.choices[0].message.contentの
+  // ままにしていたため、テストのモック形も合わせて古いままだと気づけなかった)。
+  it('reconstructs the leading "{" from the assistant-prefill response before parsing (Anthropic Messages API shape)', () => {
+    const out = runWithNarrative({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, { narrative: '飯田さんが好調です。' });
+    expect(out.response.answer).toBe(biResult.interpretation + ' 飯田さんが好調です。');
+  });
+
   it('falls back to the interpretation as the narrative when the LLM response is not valid JSON', () => {
     const out = run({ biResult, biPlan, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, 'not json');
     expect(out.response.biResult.template).toBe('T2');
@@ -573,7 +701,7 @@ describe('Format BI Response node', () => {
 
   it('carries topN/sort into cardSpec.params too (so a re-opened card keeps its "上位N件"/並び順 chip state)', () => {
     const planWithTopN = { ...biPlan, topN: 5, sort: 'value_asc' };
-    const out = run({ biResult, biPlan: planWithTopN, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, JSON.stringify({ narrative: '...' }));
+    const out = runWithNarrative({ biResult, biPlan: planWithTopN, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, { narrative: '...' });
     expect((out.response.cardSpec.params as { topN?: number; sort?: string }).topN).toBe(5);
     expect((out.response.cardSpec.params as { topN?: number; sort?: string }).sort).toBe('value_asc');
   });
@@ -583,7 +711,7 @@ describe('Format BI Response node', () => {
   // バックしてしまい、チャットで一度リファインしただけでカードの見た目が変わってしまう。
   it('carries timeGranularity/scatter/visual into cardSpec.params too (so a refined scatter/trend card keeps its visual)', () => {
     const planWithVisual = { ...biPlan, timeGranularity: 'month', scatter: true, visual: 'scatter' };
-    const out = run({ biResult, biPlan: planWithVisual, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, JSON.stringify({ narrative: '...' }));
+    const out = runWithNarrative({ biResult, biPlan: planWithVisual, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, { narrative: '...' });
     const params = out.response.cardSpec.params as { timeGranularity?: string; scatter?: boolean; visual?: string };
     expect(params.timeGranularity).toBe('month');
     expect(params.scatter).toBe(true);

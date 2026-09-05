@@ -7,6 +7,7 @@ import {
   aggregateFunnel,
   applyFilters,
   buildBiResult,
+  buildComparisonFactSheet,
   buildFactSheet,
   buildInterpretation,
   computeMetric,
@@ -267,6 +268,34 @@ describe('buildBiResult: 散布図(scatter: true)', () => {
   it('rejects a lead-side dimension (leads have no amount field to plot)', () => {
     const outcome = buildBiResult(input, { template: 'T2', dimension: 'lead_source', period: 'current_fiscal_year', scatter: true }, today, resolvePeriodPreset);
     expect(outcome.ok).toBe(false);
+  });
+});
+
+describe('buildComparisonFactSheet (RELVA_BI_開発方針報告書_v2.docx §3.5: AIアドバイスの「過去データとの比較」)', () => {
+  const today = new Date(2026, 7, 30); // 2026-08-30
+  const input = { opportunityRecords: OPPORTUNITIES, leadRecords: [] };
+  // 前期(2025-04-01〜2026-03-31)相当のレンジ。この範囲に入るOPPORTUNITIESは
+  // 2025-12-01(失注・佐藤)の1件のみ。
+  const comparisonRange = { start: '2025-04-01', end: '2026-03-31' };
+
+  it('aggregates the same metric/dimension over the given comparison range and labels it', () => {
+    const factSheet = buildComparisonFactSheet(input, { template: 'T2', metric: 'count', dimension: 'owner' }, today, comparisonRange, '前期');
+    expect(factSheet).toBe('前期: 佐藤: 1件');
+  });
+
+  it('returns null for a scatter plan (no single "1つ前の期間" concept for per-record points)', () => {
+    const factSheet = buildComparisonFactSheet(input, { template: 'T2', dimension: 'owner', scatter: true }, today, comparisonRange, '前期');
+    expect(factSheet).toBeNull();
+  });
+
+  it('returns null for a month-trend plan (timeGranularity already covers a whole date range, not a single "前の期間")', () => {
+    const factSheet = buildComparisonFactSheet(input, { template: 'T2', metric: 'count', timeGranularity: 'month' }, today, comparisonRange, '前期');
+    expect(factSheet).toBeNull();
+  });
+
+  it('returns null when the comparison-range aggregation itself fails (e.g. an invalid metric/dimension combination)', () => {
+    const factSheet = buildComparisonFactSheet(input, { template: 'T2', metric: 'amount_sum', dimension: 'lead_source' }, today, comparisonRange, '前期');
+    expect(factSheet).toBeNull();
   });
 });
 

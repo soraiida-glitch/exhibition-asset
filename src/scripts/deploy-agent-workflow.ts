@@ -22,6 +22,7 @@ async function main() {
   const workflow = buildAgentWorkflow({
     webhookSecret,
     openaiApiKey: requireEnvValue('OPENAI_API_KEY', env.openaiApiKey),
+    anthropicApiKey: requireEnvValue('ANTHROPIC_API_KEY', env.anthropicApiKey),
     kintoneBaseUrl: `https://${env.kintoneSubdomain}.cybozu.com`,
     accountAppId: requireAppId(env, 'kintoneAppIdAccount'),
     accountApiToken: requireEnvValue('KINTONE_API_TOKEN_ACCOUNT', env.kintoneApiTokenAccount),

@@ -11,6 +11,8 @@ export interface AppEnv {
   n8nInstanceUrl: string;
   n8nApiKey: string;
   openaiApiKey?: string;
+  /** RELVA_BI_開発方針報告書_v2.docx §3.5 — AIによるインサイト・アドバイス(BI Narrative)専用。 */
+  anthropicApiKey?: string;
   tavilyApiKey?: string;
   n8nWebhookSecret?: string;
   n8nAgentWebhookUrl?: string;
@@ -95,6 +97,7 @@ export function loadEnv(): AppEnv {
     n8nInstanceUrl: process.env.N8N_INSTANCE_URL!,
     n8nApiKey: process.env.N8N_API_KEY!,
     openaiApiKey: process.env.OPENAI_API_KEY || undefined,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || undefined,
     tavilyApiKey: process.env.TAVILY_API_KEY || undefined,
     n8nWebhookSecret: process.env.N8N_WEBHOOK_SECRET || undefined,
     n8nAgentWebhookUrl: process.env.N8N_KINTONE_AGENT_WEBHOOK_URL || undefined,

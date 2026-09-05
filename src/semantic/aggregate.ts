@@ -740,6 +740,31 @@ export function buildBiResult(
 }
 
 /**
+ * RELVA_BI_開発方針報告書_v2.docx §3.5(AIによるインサイト・アドバイス)— 「過去データとの
+ * 比較」向けに、同じ template/metric/dimension等で直前の同種期間(前期/先月/先々月。
+ * comparisonRangeはfiscal.tsのresolveComparisonRange()で決定的に算出したもの——ここでは
+ * 期間の意味を一切解釈しない)を集計し、factSheet形式の文字列を作る。
+ *
+ * buildBiResult()を「期間の解決だけ固定の比較期間に差し替えて」もう一度呼ぶだけ——集計
+ * ロジック自体はメインの結果と完全に同じ経路を通る(§6-3: 集計ロジックを経路によって
+ * 分岐/重複させない)。散布図(scatter)・月別推移(timeGranularity)は「1つ前の期間」という
+ * 軸を持たない/意味が異なるため対象外(null を返す——BI Narrativeへは比較無しで渡る)。
+ */
+export function buildComparisonFactSheet(
+  input: RunAggregateInput,
+  plan: BiPlanLike,
+  today: Date,
+  comparisonRange: FiscalYearRange,
+  comparisonLabel: string,
+): string | null {
+  if (plan.scatter || plan.timeGranularity) return null;
+  const outcome = buildBiResult(input, plan, today, () => comparisonRange);
+  if (!outcome.ok) return null;
+  const factSheet = buildFactSheet(plan.template, plan.metric, outcome.biResult.title, outcome.biResult.data as Record<string, unknown>);
+  return factSheet ? `${comparisonLabel}: ${factSheet}` : null;
+}
+
+/**
  * `recordToTextEmbeddable()`(src/lib/record-to-text.ts)と同じ手法: 各関数を `.toString()`
  * して連結し、n8n Code node にそのまま貼り付けて実行できる文字列を返す。定数(const)は
  * 関数と違って `.toString()` で拾えないため、`JSON.stringify` で再構築した宣言を先頭に足す。
@@ -778,6 +803,7 @@ export function aggregateEmbeddable(): string {
     buildMonthlyTrendResult,
     buildScatterResult,
     buildBiResult,
+    buildComparisonFactSheet,
   ].map((fn) => fn.toString());
   return [shim, ...consts, ...fns].join('\n');
 }

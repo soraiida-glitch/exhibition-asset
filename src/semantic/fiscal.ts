@@ -61,9 +61,42 @@ export function resolvePeriodPreset(preset: PeriodPreset, today: Date): FiscalYe
   return currentFiscalYearRange(today);
 }
 
+/**
+ * RELVA BI 追加要件定義書 §3.5(AIによるインサイト・アドバイス)— 「過去データとの比較」を
+ * 見せるための、直前の同種期間(今期→前期、今月→先月、先月→先々月)を返す。resolvePeriodPreset
+ * と同じ「ルーターLLM/AIには日付計算をさせない」原則を、比較期間の算出にも適用する唯一の
+ * 変換ポイント。"all"は比較対象となる「1つ前」が定まらないため null。
+ */
+export function resolveComparisonRange(preset: PeriodPreset, today: Date): FiscalYearRange | null {
+  if (preset === 'all') return null;
+  if (preset === 'current_month') {
+    const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    return monthRange(prev.getFullYear(), prev.getMonth() + 1);
+  }
+  if (preset === 'last_month') {
+    const prev = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+    return monthRange(prev.getFullYear(), prev.getMonth() + 1);
+  }
+  // current_fiscal_year: 1年前の同じ日を基準に前期のレンジを計算する
+  // (currentFiscalYearRangeの年度境界ロジックをそのまま再利用し、重複実装しない)。
+  const prevYearToday = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+  return currentFiscalYearRange(prevYearToday);
+}
+
+/** resolveComparisonRange() が返す期間の日本語ラベル(factSheet・ナレーション向け)。 */
+export const COMPARISON_PERIOD_LABELS: Record<PeriodPreset, string> = {
+  current_fiscal_year: '前期',
+  current_month: '先月',
+  last_month: '先々月',
+  all: '',
+};
+
 export function fiscalEmbeddable(): string {
   const shim = 'function __name(fn) { return fn; }';
-  const consts = [`const DEFAULT_FISCAL_YEAR_START_MONTH = ${DEFAULT_FISCAL_YEAR_START_MONTH};`];
-  const fns = [currentFiscalYearRange, pad2, monthRange, resolvePeriodPreset].map((fn) => fn.toString());
+  const consts = [
+    `const DEFAULT_FISCAL_YEAR_START_MONTH = ${DEFAULT_FISCAL_YEAR_START_MONTH};`,
+    `const COMPARISON_PERIOD_LABELS = ${JSON.stringify(COMPARISON_PERIOD_LABELS)};`,
+  ];
+  const fns = [currentFiscalYearRange, pad2, monthRange, resolvePeriodPreset, resolveComparisonRange].map((fn) => fn.toString());
   return [shim, ...consts, ...fns].join('\n');
 }
