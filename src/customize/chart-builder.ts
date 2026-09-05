@@ -34,6 +34,7 @@ import { renderKpiCard } from './charts/kpiCard';
 import { renderAreaChart, renderLineChart } from './charts/lineChart';
 import { renderRecordList } from './charts/recordList';
 import { renderScatter } from './charts/scatter';
+import { renderCardChat } from './card-chat';
 import { THEME } from './theme';
 import { renderVizError } from './viz';
 
@@ -533,7 +534,9 @@ export function renderChartBuilder(
 
   // プレビュー下の「📌 ダッシュボードにピン留め」ボタン。単一グラフ・コンボの両方から呼ぶ
   // (押した後の挙動はどちらも同じ——onPin()を呼んで完了メッセージに切り替えるだけ)。
-  function appendPinButton(cardState: ChatCardState): void {
+  // getCardStateを都度呼ぶことで、グラフ単位のチャット(card-chat.ts)でリファインした後に
+  // ピン留めしても、リファイン後の最新の内容がそのままピン留めされるようにしている。
+  function appendPinButton(getCardState: () => ChatCardState): void {
     const pinBtn = document.createElement('button');
     pinBtn.type = 'button';
     pinBtn.className = 'exh-chart-builder-pin-btn';
@@ -542,7 +545,7 @@ export function renderChartBuilder(
       pinBtn.disabled = true;
       pinBtn.textContent = 'ピン留め中...';
       callbacks
-        .onPin(cardState)
+        .onPin(getCardState())
         .then(() => {
           pinBtn.textContent = '📌 ピン留めしました';
         })
@@ -575,29 +578,35 @@ export function renderChartBuilder(
     previewWrap.style.display = '';
     previewWrap.innerHTML = '';
 
+    const previewTitleEl = document.createElement('div');
+    previewTitleEl.className = 'exh-chart-builder-preview-title';
+    previewWrap.appendChild(previewTitleEl);
+
+    // チャート本体だけを別のコンテナに入れておく——グラフ単位のチャットでリファインした際、
+    // タイトル/チャット欄/ピン留めボタンには触れずチャートだけを差し替えられるようにするため。
+    const chartWrap = document.createElement('div');
+    previewWrap.appendChild(chartWrap);
+
     // コンボ(棒+折れ線)は指標を2回集計する特別な組み立てが必要——buildBiResultを1回だけ
-    // 呼ぶ通常経路とは別に処理する。
+    // 呼ぶ通常経路とは別に処理する。n8n側がcomboMetricを解釈できないため、グラフ単位の
+    // チャットもコンボには提供しない(card-chat.ts冒頭のコメント参照)。
     if (visualDef.combo) {
       const comboOutcome = buildComboOutcome(datasets, params, today);
       if (!comboOutcome.ok) {
         renderVizError(previewWrap, comboOutcome.message);
         return;
       }
-      const previewTitleEl = document.createElement('div');
-      previewTitleEl.className = 'exh-chart-builder-preview-title';
       previewTitleEl.textContent = comboOutcome.result.title;
-      previewWrap.appendChild(previewTitleEl);
+      disposePreview = renderCombo(chartWrap, comboOutcome.result);
 
-      disposePreview = renderCombo(previewWrap, comboOutcome.result);
-
-      appendPinButton({
+      appendPinButton(() => ({
         template: 'T2',
         params,
         title: comboOutcome.result.title,
         interpretation: comboOutcome.result.interpretation,
         filtersApplied: comboOutcome.result.filtersApplied,
         data: comboOutcome.result.primaryData,
-      });
+      }));
       return;
     }
 
@@ -625,20 +634,35 @@ export function renderChartBuilder(
       return;
     }
 
-    const previewTitleEl = document.createElement('div');
-    previewTitleEl.className = 'exh-chart-builder-preview-title';
     previewTitleEl.textContent = outcome.biResult.title;
-    previewWrap.appendChild(previewTitleEl);
+    disposePreview = renderVisual(chartWrap, visual, outcome.biResult);
 
-    disposePreview = renderVisual(previewWrap, visual, outcome.biResult);
-
-    appendPinButton({
+    // ピン留め前でも自然言語で調整できるようにする(方針書§3.3「②作成→③チャットで
+    // 微調整→④ピン留め」の順序どおり)。cardStateはletで持ち、リファインのたびに
+    // 差し替える——appendPinButtonはgetCardState()で常に最新の内容を読むため、
+    // リファイン後にピン留めしても最新の内容がそのまま保存される。
+    let cardState: ChatCardState = {
       template: visualDef.template,
       params,
       title: outcome.biResult.title,
       interpretation: outcome.biResult.interpretation,
       filtersApplied: outcome.biResult.filtersApplied,
       data: outcome.biResult.data,
+    };
+
+    const chatWrap = document.createElement('div');
+    previewWrap.appendChild(chatWrap);
+    renderCardChat(chatWrap, cardState, {
+      onUpdated: (newCard, biResult) => {
+        cardState = newCard;
+        if (!biResult) return;
+        previewTitleEl.textContent = newCard.title || biResult.title;
+        disposePreview?.();
+        chartWrap.innerHTML = '';
+        disposePreview = renderVisual(chartWrap, visual, biResult);
+      },
     });
+
+    appendPinButton(() => cardState);
   });
 }

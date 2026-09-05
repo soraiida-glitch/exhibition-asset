@@ -24,6 +24,7 @@ import { resolvePeriodPreset } from '../semantic/fiscal';
 import type { PeriodPreset } from '../semantic/fiscal';
 import type { BiResult, TemplateId } from '../semantic/templates';
 import { renderBiChart } from './bi-chat';
+import { renderCardChat } from './card-chat';
 import { formatApiError } from './chat';
 import { renderChartBuilder, renderCombo, renderVisual, resolveVisual, buildComboOutcome, isComboVisual } from './chart-builder';
 import { formatMetricNumber } from './format-utils';
@@ -82,10 +83,14 @@ function injectBiDashboardStyles(): void {
 #exh-bi-dashboard .exh-bi-dashboard-card-full .exh-bi-chart-host { height: 220px; }
 #exh-bi-dashboard .exh-bi-dashboard-card-full .exh-bi-chart-host.exh-bi-chart-tall { height: 340px; }
 .exh-bi-dashboard-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.exh-bi-dashboard-ask-btn, .exh-bi-dashboard-unpin-btn { border: 1px solid ${THEME.mistLine}; background: ${THEME.cloud};
+.exh-bi-dashboard-unpin-btn, .exh-bi-dashboard-update-pin-btn { border: 1px solid ${THEME.mistLine}; background: ${THEME.cloud};
   color: ${THEME.soraDeep}; font-size: 11.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
-.exh-bi-dashboard-ask-btn:hover, .exh-bi-dashboard-unpin-btn:hover { background: ${THEME.mist}; }
+.exh-bi-dashboard-unpin-btn:hover, .exh-bi-dashboard-update-pin-btn:hover { background: ${THEME.mist}; }
+.exh-bi-dashboard-update-pin-btn:disabled { opacity: .6; cursor: default; }
 .exh-bi-dashboard-pinned-note { font-size: 11px; color: ${THEME.soraDeep}; margin-top: 4px; }
+/* コンボ(棒+折れ線)はグラフ単位のチャットに対応しない旨の注記(card-chat.ts冒頭の
+   コメント参照)。ボタンではなく静的なテキストなので控えめな色にしておく。 */
+.exh-bi-dashboard-chat-note { font-size: 11px; color: #8a8f98; margin-top: 6px; }
 /* KPIコンボカード(受注額・対応待ちリードをまとめて1コマに収める)。ユーザーから
    「数値カードはグラフほど大きくなくていい、2枚合わせてグラフ1枚分くらいの面積で十分」
    というフィードバックを受け、単独の巨大な数値表示ではなく、コンパクトな2行にした。 */
@@ -219,27 +224,44 @@ interface RenderCardOptions {
   /** 商談パイプライン・失注理由×業種のように凡例/軸ラベルが多いカードは、1/3幅では
    * ラベルが重なるため行全体の幅を使う(ユーザー報告への対応)。 */
   fullWidth?: boolean;
+  /** ピン留めカードをグラフ単位のチャットでリファインした後、「📌 この内容で更新」を
+   * 押した際にダッシュボード全体を再描画するためのコールバック(render(container)を渡す
+   * ——chart-builder.tsのonPinコールバックと同じパターン)。固定6枚(ピン留めではない)
+   * カードには渡さない——そもそも永続化する対象が無いため「更新」ボタン自体を出さない。 */
+  onDashboardChanged?: () => Promise<void>;
 }
 
-/** 「🗨️ このグラフについて聞く」「📌 ピン解除」の操作行。通常カード・コンボカードの
- * どちらのrenderCard経路からも同じ形で呼べるよう、chatCardStateを引数として受け取る。 */
+interface RenderCardActionsOptions extends RenderCardOptions {
+  /** true の場合、グラフ単位のチャット(card-chat.ts)の代わりに非対応の注記を出す。
+   * コンボ(棒+折れ線)はn8n側のAggregate BIがcomboMetricを解釈できないため、自然言語
+   * リファインを提供すると2本目の指標(折れ線)が静かに失われてしまう——安全側に倒し、
+   * そもそも提供しない(card-chat.ts冒頭のコメント参照)。 */
+  chatUnsupported?: boolean;
+  /** グラフ単位のチャットで自然言語のリファイン/ナレーションが成功した時に呼ばれる。
+   * 呼び出し側(renderCard)がvisual解決込みでチャートを差し替える。chatUnsupportedが
+   * trueの場合はcard-chat自体を描画しないため呼ばれない。 */
+  onCardRefined?: (newCard: ChatCardState, biResult: BuiltBiResult) => void;
+}
+
+/** 「📌 ピン解除」ボタン+グラフ単位のチャット(card-chat.ts)の操作エリア。通常カード・
+ * コンボカードのどちらのrenderCard経路からも同じ形で呼べるよう、chatCardStateを引数として
+ * 受け取る。全体チャットへ飛ばす「🗨️ このグラフについて聞く」ボタンは、カードの真下で
+ * 直接自然言語のやり取りができるこのグラフ単位のチャットに置き換えた
+ * (RELVA_BI_開発方針報告書_v2.docx §3.3 の差別化ポイント)。 */
 function renderCardActions(
   cardEl: HTMLElement,
   chatCardState: ChatCardState,
-  opts: RenderCardOptions,
+  opts: RenderCardActionsOptions,
 ): void {
-  const actionsRow = document.createElement('div');
-  actionsRow.className = 'exh-bi-dashboard-card-actions';
-  cardEl.appendChild(actionsRow);
-
-  const askBtn = document.createElement('button');
-  askBtn.type = 'button';
-  askBtn.className = 'exh-bi-dashboard-ask-btn';
-  askBtn.textContent = '🗨️ このグラフについて聞く';
-  askBtn.addEventListener('click', () => {
-    openChatWithBiQuestion('このグラフについて何か気づくことはある?', chatCardState);
-  });
-  actionsRow.appendChild(askBtn);
+  let actionsRow: HTMLElement | undefined;
+  function getActionsRow(): HTMLElement {
+    if (!actionsRow) {
+      actionsRow = document.createElement('div');
+      actionsRow.className = 'exh-bi-dashboard-card-actions';
+      cardEl.appendChild(actionsRow);
+    }
+    return actionsRow;
+  }
 
   if (opts.pinnedCardId) {
     const unpinBtn = document.createElement('button');
@@ -255,8 +277,56 @@ function renderCardActions(
           renderVizError(cardEl, 'ピン解除に失敗しました: ' + formatApiError(err));
         });
     });
-    actionsRow.appendChild(unpinBtn);
+    getActionsRow().appendChild(unpinBtn);
   }
+
+  if (opts.chatUnsupported) {
+    const note = document.createElement('div');
+    note.className = 'exh-bi-dashboard-chat-note';
+    note.textContent = 'コンボグラフは現在チャットでの質問・修正には対応していません。';
+    cardEl.appendChild(note);
+    return;
+  }
+
+  // ピン留めカードをグラフ単位のチャットでリファインした内容をダッシュボードへ保存し
+  // 直すための「更新」ボタン。専用の更新APIは新設せず、既存のピン解除+ピン留めの
+  // 組み合わせで実現する(§3「入口が2つ、処理は1本」と同じ発想——新しいエンドポイントを
+  // 増やさず既存の2つを繋ぐだけ)。リファインが実際に成功するまでは表示しない
+  // (何も変えていないのに「更新」ボタンだけ出ているのは紛らわしいため)。
+  let updatePinBtn: HTMLButtonElement | undefined;
+  function showUpdatePinBtn(newCard: ChatCardState): void {
+    if (!opts.pinnedCardId || !opts.onDashboardChanged) return;
+    if (!updatePinBtn) {
+      updatePinBtn = document.createElement('button');
+      updatePinBtn.type = 'button';
+      updatePinBtn.className = 'exh-bi-dashboard-update-pin-btn';
+      getActionsRow().appendChild(updatePinBtn);
+    }
+    const btn = updatePinBtn;
+    btn.disabled = false;
+    btn.textContent = '📌 この内容で更新';
+    btn.onclick = () => {
+      btn.disabled = true;
+      btn.textContent = '更新中...';
+      unpinCard(opts.pinnedCardId!)
+        .then(() => pinCardFromBuilder(newCard))
+        .then(() => opts.onDashboardChanged!())
+        .catch((err) => {
+          btn.disabled = false;
+          btn.textContent = '📌 この内容で更新';
+          renderVizError(cardEl, '更新に失敗しました: ' + formatApiError(err));
+        });
+    };
+  }
+
+  const chatContainer = document.createElement('div');
+  cardEl.appendChild(chatContainer);
+  renderCardChat(chatContainer, chatCardState, {
+    onUpdated: (newCard, biResult) => {
+      if (biResult) opts.onCardRefined?.(newCard, biResult);
+      showUpdatePinBtn(newCard);
+    },
+  });
 }
 
 /** 1枚のカード(固定6枚・ピン留めどちらも同じ形)を集計して描画する。デフォルトカードと
@@ -278,7 +348,8 @@ function renderCard(
 
   // コンボ(棒+折れ線)は指標を2回集計する専用の組み立てが必要なため、他の見た目とは
   // 別経路で処理する(chart-builder.ts側のプレビュー生成と同じ理由——buildBiResultの
-  // 単一呼び出しでは2指標を1つのグラフにまとめられない)。
+  // 単一呼び出しでは2指標を1つのグラフにまとめられない)。グラフ単位のチャットも
+  // n8n側がcomboMetricを解釈できないため提供しない(card-chat.ts冒頭のコメント参照)。
   const visual = card.params.visual ? resolveVisual(card.template, card.params.visual) : undefined;
   if (visual && isComboVisual(visual)) {
     const comboOutcome = buildComboOutcome(datasets, card.params, today);
@@ -303,7 +374,7 @@ function renderCard(
         filtersApplied: comboOutcome.result.filtersApplied,
         data: comboOutcome.result.primaryData,
       },
-      opts,
+      { ...opts, chatUnsupported: true },
     );
     return;
   }
@@ -329,13 +400,30 @@ function renderCard(
   // その見た目のまま再描画する。それ以外(固定6枚・見た目未指定の既存ピン留めカード)は
   // 今まで通りrenderBiChartの自動選択(T2はカテゴリ数でドーナツ/横棒を自動判定等)に任せる
   // ——見た目を選ぶ機能を追加したことで既存の表示が変わらないようにするため。
+  let disposeChart: (() => void) | undefined;
   if (visual) {
-    renderVisual(chartHost, visual, outcome.biResult as unknown as BuiltBiResult);
+    disposeChart = renderVisual(chartHost, visual, outcome.biResult as unknown as BuiltBiResult);
   } else {
-    renderBiChart(chartHost, outcome.biResult as unknown as BiResult);
+    disposeChart = renderBiChart(chartHost, outcome.biResult as unknown as BiResult);
   }
 
-  renderCardActions(cardEl, toChatCardState(card, outcome.biResult), opts);
+  renderCardActions(cardEl, toChatCardState(card, outcome.biResult), {
+    ...opts,
+    // グラフ単位のチャットでリファイン/ナレーションが成功したら、そのカードのチャートだけを
+    // その場で差し替える(ページ全体の再読み込みはしない)。見た目(visual)は自然言語からは
+    // 変更させない設計のため常に同じ描画関数を使い続けられる——server側もvisualをそのまま
+    // 維持して返す(agent-workflow.tsのParse BI Plan/Format BI Response参照)。
+    onCardRefined: (newCard, biResult) => {
+      titleEl.textContent = newCard.title || biResult.title;
+      disposeChart?.();
+      chartHost.innerHTML = '';
+      if (visual) {
+        disposeChart = renderVisual(chartHost, visual, biResult);
+      } else {
+        disposeChart = renderBiChart(chartHost, biResult as unknown as BiResult);
+      }
+    },
+  });
 }
 
 /**
@@ -433,7 +521,7 @@ async function render(container: HTMLElement): Promise<void> {
     for (const row of pinnedCards) {
       const card: CardSpec = { id: row.id, template: row.template, params: row.params, title: row.title, pinned: true };
       const fullWidth = row.template === 'T4' || row.template === 'T5' || row.template === 'T8';
-      renderCard(grid, card, datasets, today, { pinnedCardId: row.id, fullWidth });
+      renderCard(grid, card, datasets, today, { pinnedCardId: row.id, fullWidth, onDashboardChanged: () => render(container) });
     }
   }
 

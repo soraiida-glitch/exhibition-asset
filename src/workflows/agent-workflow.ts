@@ -686,19 +686,29 @@ function needClarify(message) {
 
 // query/refine共通: テンプレ・指標・次元の組み合わせが妥当かを検証する。
 // 妥当なら null、妥当でなければ聞き返し文言を返す。
-function validateShape(template, metric, dimension, dimensionB) {
+// scatter/timeGranularityはグラフビルダー経由でのみ設定される見た目フラグ(§6ガードレール
+// ——自然言語では変更させない)。ただし、リファイン/ナレーションでcurrentCardからこれらを
+// 引き継いだ結果を検証する際、通常のT2と同じ「metric/dimension必須」ルールをそのまま
+// 適用すると、実際の散布図・月別推移カード(chart-builder.tsのfieldsForVisualがmetric/
+// dimensionのどちらかを意図的に隠すため、その項目は元から未設定)を正しいのに聞き返して
+// しまう——buildScatterResult/buildMonthlyTrendResult自身の必須項目と揃える。
+function validateShape(template, metric, dimension, dimensionB, scatter, timeGranularity) {
   const dim = dimension ? DIMENSION_FIELD_MAP[dimension] : undefined;
   const dimB = dimensionB ? DIMENSION_FIELD_MAP[dimensionB] : undefined;
-  // T8(条件抽出リスト)は runAggregate 側で metric を一切参照しない(固定カラムの一覧を返す
-  // だけ)ため、ここでも metric を必須にしない——実際にライブでT8質問が「指標を教えて」と
-  // 聞き返されてしまう回帰を起こしたため明示的に除外している。
-  const metricOk = template === "T8" || (metric && METRIC_CODES.indexOf(metric) !== -1);
+  // T8(条件抽出リスト)はrunAggregate側でmetricを一切参照しない(固定カラムの一覧を返す
+  // だけ)ため、ここでもmetricを必須にしない——実際にライブでT8質問が「指標を教えて」と
+  // 聞き返されてしまう回帰を起こしたため明示的に除外している。散布図もY軸(金額)を固定する
+  // ためmetricを使わない(buildScatterResult参照)。
+  const metricOk = template === "T8" || scatter || (metric && METRIC_CODES.indexOf(metric) !== -1);
 
   if (!metricOk) return "どの指標について知りたいか教えていただけますか?(例: 件数、金額合計、受注率など)";
   if (dimension && !dim) return "すみません、その切り口には対応していません。担当者別・フェーズ別・業種別・失注理由別・流入経路別などでお試しください。";
   if (dimensionB && !dimB) return "すみません、その切り口には対応していません。";
   if (dim && dim.targetApp === "lead" && template !== "T8" && metric !== "count") return "リードの分析では件数のみ集計できます。";
-  if (template === "T2" && !dim) return "何を軸にカテゴリ別に見たいか教えていただけますか?(例: 担当者別、フェーズ別など)";
+  // 月別推移(timeGranularity: 'month')はclose_dateを月単位でバケット化するだけで、
+  // カテゴリの切り口(dimension)を使わない(buildMonthlyTrendResult参照)ため、T2の
+  // 「dimension必須」チェックから除外する。散布図はdimensionが必須のままなので除外しない。
+  if (template === "T2" && !dim && !timeGranularity) return "何を軸にカテゴリ別に見たいか教えていただけますか?(例: 担当者別、フェーズ別など)";
   if (template === "T5" && (!dim || !dimB)) return "クロス集計には2つの軸が必要です。例えば「失注理由を業種別に」のように教えてください。";
   if (template === "T5" && dim && dimB && dim.targetApp !== dimB.targetApp) return "クロス集計は案件どうし、またはリードどうしの軸のみ組み合わせられます。";
   return null;
@@ -735,6 +745,13 @@ if (op === "clarify") {
       filters: p.filters || [],
       topN: p.topN,
       sort: p.sort,
+      // 散布図・月別推移・選んだ見た目も維持する(グラフ単位のチャット拡張)。落とすと
+      // narrateの応答は元のcurrentCard.dataをそのまま echo するだけなので実害は無いが、
+      // Format BI ResponseのcardSpec.paramsがこれを見るため、ここで揃えておかないと
+      // 次のリファインでこのカードが普通のカテゴリ別グラフへ戻ってしまう。
+      timeGranularity: p.timeGranularity,
+      scatter: p.scatter,
+      visual: p.visual,
       needClarify: null,
     };
   }
@@ -753,7 +770,7 @@ if (op === "clarify") {
     if (raw.sort && SORTS.indexOf(raw.sort) !== -1) patch.sort = raw.sort;
 
     const merged = refine(currentCard.template, currentCard.params || {}, patch);
-    const invalidMsg = validateShape(currentCard.template, merged.metric, merged.dimension, merged.dimensionB);
+    const invalidMsg = validateShape(currentCard.template, merged.metric, merged.dimension, merged.dimensionB, merged.scatter, merged.timeGranularity);
     if (invalidMsg) {
       plan = needClarify(invalidMsg);
     } else {
@@ -768,6 +785,15 @@ if (op === "clarify") {
         filters: merged.filters || [],
         topN: merged.topN,
         sort: merged.sort,
+        // ルーターLLMのパッチにはscatter/timeGranularity/visualが含まれない(意図的——
+        // 「見た目を変える」はグラフビルダーの担当で、自然言語リファインでは変更させない)。
+        // ただしrefine()自体はcurrentCard.paramsからこれらをそのまま引き継ぐため、ここでも
+        // 一緒に運ばないと、散布図・月別推移カードを自然言語でリファインした瞬間に
+        // 普通のカテゴリ別集計へ静かに戻ってしまう(Aggregate BIのbuildBiResultが
+        // plan.scatter/plan.timeGranularityを見て分岐するため)。
+        timeGranularity: merged.timeGranularity,
+        scatter: merged.scatter,
+        visual: merged.visual,
         needClarify: null,
       };
     }
@@ -1220,6 +1246,11 @@ const cardSpec = {
     period: plan.period ? { preset: plan.period } : undefined,
     topN: plan.topN,
     sort: plan.sort,
+    // グラフ単位のチャット拡張: 散布図・月別推移・選んだ見た目を維持したままcardSpecを
+    // 返す(欠けるとdashboard.tsのresolveVisual()が既定の見た目にフォールバックしてしまう)。
+    timeGranularity: plan.timeGranularity,
+    scatter: plan.scatter,
+    visual: plan.visual,
   },
   title: biResult.title,
   interpretation: biResult.interpretation,

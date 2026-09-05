@@ -194,6 +194,30 @@ describe('Parse BI Plan node', () => {
     expect(out.biPlan.sort).toBe('value_asc');
   });
 
+  // グラフ単位のチャット拡張の回帰テスト: これらのフラグはルーターLLMのpatchには含まれない
+  // (自然言語で見た目そのものを変えさせない、という意図的な設計)が、refine()自体は
+  // currentCard.paramsからそのまま引き継ぐ——それをplan構築時に落とさず運ぶことを確認する。
+  // 落とすと、散布図・月別推移カードを自然言語でリファインした瞬間に普通のカテゴリ別集計へ
+  // 静かに戻ってしまう(buildBiResultがplan.scatter/plan.timeGranularityを見て分岐するため)。
+  it('op:refine keeps timeGranularity/scatter/visual from currentCard even though the patch never sets them', () => {
+    const scatterCard = {
+      template: 'T2',
+      params: { dimension: 'owner', period: { preset: 'current_fiscal_year' }, scatter: true, visual: 'scatter' },
+    };
+    const out = run({ op: 'refine', period: 'last_month' }, { message: '先月で見せて', currentCard: scatterCard });
+    expect(out.biPlan.period).toBe('last_month'); // 変更
+    expect((out.biPlan as unknown as { scatter?: boolean }).scatter).toBe(true); // 維持
+    expect((out.biPlan as unknown as { visual?: string }).visual).toBe('scatter'); // 維持
+
+    const trendCard = {
+      template: 'T2',
+      params: { metric: 'count', period: { preset: 'current_fiscal_year' }, timeGranularity: 'month', visual: 'trend_line' },
+    };
+    const out2 = run({ op: 'refine', period: 'all' }, { message: '全期間で見せて', currentCard: trendCard });
+    expect((out2.biPlan as unknown as { timeGranularity?: string }).timeGranularity).toBe('month'); // 維持
+    expect((out2.biPlan as unknown as { visual?: string }).visual).toBe('trend_line'); // 維持
+  });
+
   it('op:refine ignores an invalid sort value from the router instead of leaking it through', () => {
     const out = run({ op: 'refine', sort: 'not_a_real_sort' }, { message: '変な並び順で', currentCard });
     expect(out.biPlan.sort).toBeUndefined();
@@ -552,6 +576,18 @@ describe('Format BI Response node', () => {
     const out = run({ biResult, biPlan: planWithTopN, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, JSON.stringify({ narrative: '...' }));
     expect((out.response.cardSpec.params as { topN?: number; sort?: string }).topN).toBe(5);
     expect((out.response.cardSpec.params as { topN?: number; sort?: string }).sort).toBe('value_asc');
+  });
+
+  // グラフ単位のチャット拡張(散布図・月別推移・選んだ見た目)の回帰テスト: これらが
+  // cardSpec.paramsから落ちると、dashboard.tsのresolveVisual()が既定の見た目にフォール
+  // バックしてしまい、チャットで一度リファインしただけでカードの見た目が変わってしまう。
+  it('carries timeGranularity/scatter/visual into cardSpec.params too (so a refined scatter/trend card keeps its visual)', () => {
+    const planWithVisual = { ...biPlan, timeGranularity: 'month', scatter: true, visual: 'scatter' };
+    const out = run({ biResult, biPlan: planWithVisual, sessionId: 's', userId: 'u', userName: 'n', message: 'm' }, JSON.stringify({ narrative: '...' }));
+    const params = out.response.cardSpec.params as { timeGranularity?: string; scatter?: boolean; visual?: string };
+    expect(params.timeGranularity).toBe('month');
+    expect(params.scatter).toBe(true);
+    expect(params.visual).toBe('scatter');
   });
 });
 

@@ -6,13 +6,19 @@ import {
   OPPORTUNITY_STAGE_OPTIONS,
 } from '../apps/schema';
 import type { ChatCardState } from '../semantic/cards';
-import type { BiResult } from '../semantic/templates';
 import { escHtml } from './html-utils';
 // 既存の `import { escHtml } from './chat'` を壊さないための re-export。中身は html-utils.ts
 // (副作用のない場所) にある — RELVA BI のチャートコンポーネント(src/customize/charts/*)は
 // dev/playground からも読み込まれるため、chat.ts 経由ではなく html-utils.ts から直接 import する。
 export { escHtml };
 import { renderBiResult } from './bi-chat';
+// AgentResponse/ChatMessage/sendBiCardMessage は bi-webhook.ts(chat.ts/dashboard.tsのどちらも
+// importしない葉モジュール)からそのまま再エクスポートする——card-chat.tsが同じ型・同じ
+// 送信関数をchat.ts経由ではなくbi-webhook.tsから直接importできるようにするため(理由は
+// bi-webhook.ts冒頭のコメント参照)。
+import { sendBiCardMessage } from './bi-webhook';
+import type { AgentResponse, ChatMessage, KintoneContextRef } from './bi-webhook';
+export type { AgentResponse, ChatMessage };
 import { renderCardControls } from './card-controls';
 import { initBiDashboard } from './dashboard';
 import { JPEG_QUALITY, MAX_IMAGE_BYTES, RESIZE_MAX_PX, computeResizedDimensions } from './image-utils';
@@ -25,42 +31,6 @@ import { initRoleplay } from './roleplay';
 import { initSalesScoring } from './sales-scoring';
 import { getOrCreateSpaceWidgetRow } from './space-dashboard';
 import { THEME, injectFontStyles } from './theme';
-
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-interface ReferencedRecord {
-  label: string;
-  recordId?: string;
-  appName?: string;
-}
-
-interface KintoneContextRef {
-  recordId: string;
-  appName: string;
-  label: string;
-}
-
-type AgentAction =
-  | 'show_form_account'
-  | 'show_form_edit_account'
-  | 'show_form_opportunity'
-  | 'show_form_edit_opportunity'
-  | 'generate_proposal';
-
-interface AgentResponse {
-  answer?: string;
-  referencedRecords?: ReferencedRecord[];
-  action?: AgentAction | null;
-  prefill?: Record<string, unknown>;
-  /** RELVA BI (要件定義書) — n8n の Format BI Response が設定する。ある場合のみチャートを描画する。 */
-  biResult?: BiResult;
-  /** RELVA BI 追加要件定義書 §3/§4 — 「直前に表示したカード」。次のリファイン/ナレーション
-   *  リクエストに currentCard として載せて送り返すことで、ルーターが会話の続きだと判断できる。 */
-  cardSpec?: ChatCardState;
-}
 
 interface MeishiResult {
   data: {
@@ -816,37 +786,12 @@ async function handleSend(text: string): Promise<void> {
   pushUser(text);
   conversationHistory.push({ role: 'user', content: text });
 
-  const user = kintone.getLoginUser();
-  const appId = String(kintone.app.getId() || '');
-  const recordId = String(kintone.app.record?.getId?.() || '');
-
   try {
-    const resp = await kintone.proxy(
-      CONFIG.webhookUrl,
-      'POST',
-      { 'Content-Type': 'application/json', 'x-webhook-secret': CONFIG.webhookSecret },
-      JSON.stringify({
-        message: text,
-        sessionId: SESSION_ID,
-        userId: user.id,
-        userName: user.name,
-        userCode: user.code,
-        appId,
-        recordId,
-        history: conversationHistory.slice(-12),
-        lastKintoneContext,
-        currentCard,
-      }),
-    );
-
-    const raw = String(resp[0] ?? '').trim();
-    let data: AgentResponse;
-    try {
-      data = raw.startsWith('<') ? { answer: '応答の取得に失敗しました。' } : JSON.parse(raw);
-    } catch {
-      data = { answer: raw || '応答の取得に失敗しました。' };
-    }
-
+    const data = await sendBiCardMessage(text, currentCard, {
+      sessionId: SESSION_ID,
+      history: conversationHistory.slice(-12),
+      lastKintoneContext,
+    });
     const answer = data.answer || '';
     conversationHistory.push({ role: 'assistant', content: answer });
     pushAI(answer, data, text);
